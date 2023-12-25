@@ -1,0 +1,77 @@
+#richtable {
+    width: 100%;
+    height: 1fr;
+    align-vertical: top;
+    align-horizontal: center;
+    overflow-y: auto;
+    overflow-x: auto;
+    border: heavy blue;
+
+}
+
+#bottom_box {
+    height: 15;
+    dock: bottom;
+    width: 100%;
+}
+
+#progress {
+    height: 6;
+    width: 100%;
+    border: heavy;
+    padding-top: 1;
+    padding-left: 5;
+}
+
+.datatable--cursor {
+    background: coral;
+    color: white;
+    opacity: 0.9;
+}
+
+#rich_log {
+    height: 10;
+    width: 100%;
+    border: heavy;
+}
+
+#bot {
+    height: 8;
+    dock: bottom;
+    width: 100%;
+}
+
+#rich_log {
+    width: 1fr;
+    height: 1fr;
+    border: heavy;
+}
+
+#disk_info {
+    width: 30%;
+    height: 1fr;
+    align-vertical: middle;
+    text-align: center;
+    align-horizontal: center;
+    border: heavy;
+}
+
+#button_exit {
+    width: 100%;
+    text-align: center;
+    align-vertical: middle;
+    background: coral;
+    color: white;
+}
+
+#header {
+    padding-top: 0;
+}
+
+#statsbox {
+    width: 100%;
+}
+
+#rule {
+    color: blue;
+}
