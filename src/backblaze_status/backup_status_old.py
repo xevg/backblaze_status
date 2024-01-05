@@ -379,7 +379,7 @@ class BackupStatus:
             except Exception:
                 pass
 
-    def _check_for_new_transmit_files(self) -> Path:
+    def _get_latest_logfile_name(self) -> Path:
         last_file = None
         _dir = Path(self.BZ_LOG_DIR)
         for _file in _dir.iterdir():
@@ -582,7 +582,7 @@ class BackupStatus:
             total_size_gb=int(gb(self.to_do.total_size)),
             total_size_completed_gb=int(gb(self.to_do.completed_size)),
             total_files=self.to_do.total_files,
-            total_files_completed=self.to_do.completed_files,
+            total_files_completed=int(self.to_do.completed_files),
             files_percentage=self.to_do.completed_files / self.to_do.total_files,
             time_till_complete="Calculating ",
             completion_time="Calculating ",
