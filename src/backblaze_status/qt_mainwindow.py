@@ -8,16 +8,14 @@
 
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFontDatabase, QFont
+from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
     QLabel,
     QFrame,
     QWidget,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QProgressBar,
-    QTextBrowser,
     QSizePolicy,
     QMenuBar,
     QStatusBar,
@@ -25,8 +23,12 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QVBoxLayout,
+    QAbstractItemView,
+    QDialog,
+    QTableView,
 )
-from css_styles import CssStyles
+
+from .css_styles import CssStyles
 
 # import qdarktheme
 
@@ -37,8 +39,8 @@ class Ui_MainWindow(object):
         MainWindow.resize(2100, 1000)
 
         # Define the font to use when I need a fixed font
-        fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
-        fixed_font.setPointSize(12)
+        self.fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        self.fixed_font.setPointSize(12)
 
         # The main widget
         self.centralwidget = QWidget(parent=MainWindow)
@@ -54,11 +56,11 @@ class Ui_MainWindow(object):
         |                  file_display_table               |
         |                                                   |
         +---------------------------------------------------+
+        |                  chunk_box (hidden)               |
+        +---------------------------------------------------+
         |                  message_box (hidden)             |
         +---------------------------------------------------+
-        |                  file_infp_box (hidden)           |
-        +---------------------------------------------------+
-        |                  file_infp_box (hidden)           |
+        |                  file_info_box (hidden)           |
         +---------------------------------------------------+
         |          stat_box                     |    Clock  |
         +---------------------------------------------------+
@@ -69,9 +71,28 @@ class Ui_MainWindow(object):
         self.main_vertical_container = QVBoxLayout(self.centralwidget)
         self.main_vertical_container.setObjectName("verticalLayout")
 
+        # self._create_data_model_table()
+        # test_table = QTableView(self.centralwidget)
+        # test_table.setObjectName("TestTable")
+        # test_table.setModel(BzDataTableModel(self))
+        # test_table.resizeRowsToContents()
+        # self.main_vertical_container.addWidget(test_table)
+
         # Set up the data table
         self.file_display_table = self._create_data_table()
         self.main_vertical_container.addWidget(self.file_display_table)
+        self.file_display_table.hide()
+
+        self.data_model_table = self._create_data_model_table()
+        self.data_model_table.setWordWrap(True)
+        self.data_model_table.horizontalHeader().sectionResized.connect(
+            self.data_model_table.resizeRowsToContents
+        )
+        self.main_vertical_container.addWidget(self.data_model_table)
+
+        self.chunk_box = self._create_chunk_box()
+        self.main_vertical_container.addWidget(self.chunk_box)
+        self.chunk_box.hide()
 
         # Set up the message box. It is hidden until needed
         self.message_box = self._create_label_box(
@@ -91,36 +112,26 @@ class Ui_MainWindow(object):
         # Set up the file info box. It is hidden until needed
 
         self.file_info = self._create_label_box(
-            "FileInfo",
-            placeholder="File Info Placeholder",
-            style={"padding": "2px", "border-color": "green"},
+            "FileInfo", placeholder="Waiting to start processing ..."
         )
-        self.file_info.hide()
+        self.file_info.setAlignment(Qt.AlignmentFlag.AlignLeft)
+
+        # self.file_info.hide()
         self.main_vertical_container.addWidget(self.file_info)
 
         # Set up the stats boxes
         self.stat_groupbox = QGroupBox(parent=self.centralwidget)
         # self.groupBox.setGeometry(QtCore.QRect(150, 70, 611, 80))
         self.stat_groupbox.setObjectName("StatGroupbox")
-        self.stat_groupbox.setStyleSheet(
-            "QGroupBox#StatGroupbox { border: 0px; padding: 0px; margin: 0px;}"
-        )
 
         self.stats_horizontal_Layout = QHBoxLayout(self.stat_groupbox)
         self.stats_horizontal_Layout.setObjectName("StatsHorizontalLayout")
         self.stats_horizontal_Layout.setContentsMargins(0, 0, 0, 0)
 
-        stats_style = {
-            "padding-top": "6px",
-            "padding-bottom": "6px",
-            "border-color": "green",
-            "margin": "0",
-        }
         self.stats_info = self._create_label_box(
             "StatsInfo",
             parent=self.stat_groupbox,
             placeholder="Waiting for data ...",
-            style=stats_style,
         )
         sizePolicy = QSizePolicy(
             QSizePolicy.Policy.Preferred,
@@ -130,18 +141,13 @@ class Ui_MainWindow(object):
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(self.stats_info.sizePolicy().hasHeightForWidth())
         self.stats_info.setSizePolicy(sizePolicy)
-        self.stats_info.setFrameShape(QFrame.Shape.Box)
-        self.stats_info.setFrameShadow(QFrame.Shadow.Raised)
-        self.stats_info.setLineWidth(3)
 
-        # self.backup_info_display.setContentsMargins(10, 2, 2, 2)
         self.stats_horizontal_Layout.addWidget(self.stats_info)
 
         self.clock_display = self._create_label_box(
             "Clock",
             parent=self.stat_groupbox,
             placeholder="Clock",
-            style=stats_style,
         )
         sizePolicy = QSizePolicy(
             QSizePolicy.Policy.Preferred,
@@ -153,10 +159,6 @@ class Ui_MainWindow(object):
             self.clock_display.sizePolicy().hasHeightForWidth()
         )
         self.clock_display.setSizePolicy(sizePolicy)
-        self.clock_display.setFrameShape(QFrame.Shape.Box)
-        self.clock_display.setFrameShadow(QFrame.Shadow.Raised)
-        self.clock_display.setLineWidth(3)
-        self.clock_display.setMidLineWidth(1)
 
         self.stats_horizontal_Layout.addWidget(self.clock_display)
 
@@ -166,9 +168,6 @@ class Ui_MainWindow(object):
 
         self.progress_groupbox = QGroupBox(parent=self.centralwidget)
         self.progress_groupbox.setObjectName("ProgressGroupbox")
-        self.progress_groupbox.setStyleSheet(
-            "QGroupBox#ProgressGroupbox { border-color: green; }"
-        )
 
         self.progress_horizontal_layout = QHBoxLayout(self.progress_groupbox)
         self.progress_horizontal_layout.setObjectName("horizontalLayout")
@@ -180,10 +179,10 @@ class Ui_MainWindow(object):
         self.progress_bar_header.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self.progress_bar_header.setFont(fixed_font)
+        self.progress_bar_header.setFont(self.fixed_font)
 
         self.progressBar = QProgressBar(parent=self.progress_groupbox)
-        self.progressBar.setObjectName("ProgressBar")
+        self.progressBar.setObjectName("OrangeProgressBar")
         self.progress_horizontal_layout.addWidget(self.progressBar)
         self.progressBar.setMinimum(0)
         self.progressBar.setMaximum(100)
@@ -195,7 +194,7 @@ class Ui_MainWindow(object):
         self.elapsed_time.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self.elapsed_time.setFont(fixed_font)
+        self.elapsed_time.setFont(self.fixed_font)
         self.elapsed_time.setText("Elapsed Time: Calculating ...")
 
         self.progress = QLabel(parent=self.progress_groupbox)
@@ -204,13 +203,13 @@ class Ui_MainWindow(object):
         self.progress.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self.progress.setFont(fixed_font)
+        self.progress.setFont(self.fixed_font)
         self.progress.setText("Progress: Calculating ...")
 
         self.time_remaining = QLabel(parent=self.progress_groupbox)
         self.time_remaining.setObjectName("TimeRemaining")
         self.progress_horizontal_layout.addWidget(self.time_remaining)
-        self.time_remaining.setFont(fixed_font)
+        self.time_remaining.setFont(self.fixed_font)
         self.time_remaining.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
@@ -219,7 +218,7 @@ class Ui_MainWindow(object):
         self.completion_time = QLabel(parent=self.progress_groupbox)
         self.completion_time.setObjectName("CompletionTime")
         self.progress_horizontal_layout.addWidget(self.completion_time)
-        self.completion_time.setFont(fixed_font)
+        self.completion_time.setFont(self.fixed_font)
         self.completion_time.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
@@ -231,7 +230,7 @@ class Ui_MainWindow(object):
         self.rate.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self.rate.setFont(fixed_font)
+        self.rate.setFont(self.fixed_font)
         self.rate.setText("Rate: Calculating ...")
 
         self.main_vertical_container.addWidget(self.progress_groupbox)
@@ -254,6 +253,10 @@ class Ui_MainWindow(object):
         :return:  the data table
         """
         data_table = QTableWidget(parent=self.centralwidget)
+        data_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        data_table.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        data_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        # data_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         data_table.setShowGrid(False)
         sizePolicy = QSizePolicy(
             QSizePolicy.Policy.Expanding,
@@ -263,12 +266,26 @@ class Ui_MainWindow(object):
         sizePolicy.setVerticalStretch(0)
         sizePolicy.setHeightForWidth(data_table.sizePolicy().hasHeightForWidth())
         data_table.setSizePolicy(sizePolicy)
-        data_table.setObjectName("diskinfo")
-        column_names = ["Row", "Time", "File Name", "File Size", "Interval", "Rate"]
+        data_table.setObjectName("DisplayTable")
+        column_names = [
+            "Time",
+            "File Name",
+            "File Size",
+            "Interval",
+            "Rate - marker",
+        ]
         data_table.setColumnCount(len(column_names))
         data_table.setRowCount(0)
         for index, column_name in enumerate(column_names):
             item = QTableWidgetItem(column_name)
+            if index > 1:
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+            else:
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                )
             data_table.setHorizontalHeaderItem(index, item)
 
         # Table will fit the screen horizontally
@@ -276,8 +293,123 @@ class Ui_MainWindow(object):
         data_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
-        data_table.verticalHeader().setVisible(False)
+        data_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        data_table.verticalHeader().setVisible(True)
         return data_table
+
+    def _create_progress_table(self):
+        data_table = QTableWidget(parent=self.centralwidget)
+        data_table.setShowGrid(False)
+        sizePolicy = QSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        sizePolicy.setHeightForWidth(False)
+        data_table.setSizePolicy(sizePolicy)
+        data_table.setObjectName("ProgressTable")
+        data_table.setColumnCount(20)
+        data_table.setRowCount(20)
+
+        # Table will fit the screen horizontally
+        data_table.horizontalHeader().setStretchLastSection(False)
+        data_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        data_table.verticalHeader().setVisible(False)
+        data_table.horizontalHeader().setVisible(False)
+
+        return data_table
+
+    def _create_chunk_box(self):
+        chunk_groupBox = QGroupBox(self.centralwidget)
+        chunk_groupBox.setObjectName("ChunkGroupBox")
+        chunk_groupBox.setMaximumHeight(100)
+        horizontal = QHBoxLayout(chunk_groupBox)
+        horizontal.setObjectName("ChunkBoxHorizontal")
+
+        self.transmit_chunk_progress_bar = QProgressBar(chunk_groupBox)
+        self.transmit_chunk_progress_bar.setObjectName("TransmitProgressBar")
+        self.transmit_chunk_progress_bar.hide()
+
+        horizontal.addWidget(self.transmit_chunk_progress_bar)
+
+        self.prepare_chunk_progress_bar = QProgressBar(chunk_groupBox)
+        self.prepare_chunk_progress_bar.setObjectName("PrepareProgressBar")
+        self.prepare_chunk_progress_bar.hide()
+
+        horizontal.addWidget(self.prepare_chunk_progress_bar)
+
+        self.chunk_filename = QLabel(chunk_groupBox)
+        self.chunk_filename.setObjectName("ChunkFilename")
+        horizontal.addWidget(self.chunk_filename)
+        self.chunk_filename.setText("Label goes here")
+        self.chunk_filename.setFont(self.fixed_font)
+
+        self.chunk_box_table = self._create_chunk_table()
+        horizontal.addWidget(self.chunk_box_table)
+        self.chunk_box_table.hide()
+
+        self.chunk_table_dialog = QDialog()
+        self.chunk_table_dialog.setWindowModality(Qt.WindowModality.NonModal)
+
+        self.chunk_dialog_table = self._create_chunk_table()
+
+        self.chunk_table_dialog_layout = QVBoxLayout()
+        self.chunk_table_dialog_layout.addWidget(self.chunk_dialog_table)
+
+        self.chunk_table_dialog.setLayout(self.chunk_table_dialog_layout)
+
+        return chunk_groupBox
+
+    def _create_chunk_table(self):
+        chunk_table = QTableWidget(self.centralwidget)
+        chunk_table.setObjectName("ChunkTable")
+
+        chunk_table.horizontalHeader().setMaximumSectionSize(6)
+        chunk_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.Fixed
+        )
+        chunk_table.horizontalHeader().setVisible(False)
+
+        chunk_table.verticalHeader().setMaximumSectionSize(6)
+        chunk_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        chunk_table.verticalHeader().setVisible(False)
+        chunk_table.setShowGrid(False)
+
+        chunk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        chunk_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        return chunk_table
+
+    def _create_data_model_table(self) -> QTableView:
+        data_model_table = QTableView(self.centralwidget)
+        data_model_table.setObjectName("DataModelTable")
+        data_model_table.setShowGrid(False)
+        sizePolicy = QSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        sizePolicy.setHeightForWidth(False)
+        data_model_table.setSizePolicy(sizePolicy)
+        # Table will fit the screen horizontally
+        data_model_table.horizontalHeader().setStretchLastSection(False)
+        data_model_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        # test_table.horizontalHeader().setSectionResizeMode(
+        #     1, QHeaderView.ResizeMode.Stretch
+        # )
+        data_model_table.verticalHeader().setVisible(True)
+        data_model_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        data_model_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        data_model_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+
+        return data_model_table
 
     def _create_label_box(
         self, name: str, parent=None, placeholder: str = "Placeholder", style=None
