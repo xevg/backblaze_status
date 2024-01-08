@@ -2,18 +2,18 @@ import inspect
 import logging
 import os
 import sys
+import threading
 from datetime import datetime
+from math import floor
 from pathlib import Path
 
 # from flipper import FeatureFlagClient, MemoryFeatureFlagStore
 from rich.console import Console
 from rich.text import Text
+from datetime import datetime
+from .configuration import Configuration
 
-from configuration import Configuration
-
-from math import floor
-
-DIVISOR_SIZE = 1000
+DIVISOR_SIZE = 1024
 
 
 def file_size_string(size, sign=False) -> str:
@@ -185,18 +185,24 @@ def tb_divisor():
     return Configuration.tb_divisor
 
 
-"""
-def initialize_features(flag_list: list) -> FeatureFlagClient:
-    features = FeatureFlagClient(MemoryFeatureFlagStore())
-    if not flag_list:
-        flag_list = list()
-        for flag in Configuration.default_feature_flags.keys():
-            if Configuration.default_feature_flags[flag]["default"]:
-                flag_list.append(flag)
+_multi_log = MultiLogger(
+    "BzLastFilesTransmitted",
+    terminal=True,
+)
 
-    for flag in flag_list:
-        features.create(flag)
-        features.enable(flag)
 
-    return features
-"""
+def get_lock(lock: threading.Lock, name: str, where: str) -> datetime:
+    # if where.startswith("qt_b") or where.startswith("to"):
+    #    _multi_log.log(f"Getting lock for {name} from {where}", module="lock")
+    lock.acquire()
+    return datetime.now()
+
+
+def return_lock(lock: threading.Lock, name: str, where: str, start_time: datetime):
+    # if where.startswith("qt_b") or where.startswith("to"):
+    #    _multi_log.log(
+    #        f"Returning lock for {name} from {where} {datetime.now() - start_time}",
+    #        module="lock",
+    #    )
+    lock.release()
+
