@@ -182,6 +182,93 @@ QTextEdit:focus
     border: 1px solid darkgray;
 }
 
+QProgressBar {
+    min-height: 20px;
+    max-height: 20px;
+    border-radius: 10px;
+    border: 1px solid darkgray;
+    background-color: gray;
+    text-align: center;
+    color: black;
+}
+
+QProgressBar::chunk {
+    border-radius: 10px;
+    background-color: #009688;
+}
+
+#OrangeProgressBar::chunk {
+    background: QLinearGradient( x1: 0, y1: 0,
+                             x2: 1, y2: 0, 
+                            stop: 0 #4facfe,
+                            stop: 1 #00f2fe );
+}
+
+#PrepareProgressBar::chunk {
+    background: QLinearGradient( x1: 0, y1: 0,
+                             x2: 1, y2: 0, 
+                            stop: 0 #6a11cb,
+                            stop: 1 #2575fc );  
+}
+
+#DeepBlueProgressBar::chunk {
+    background: QLinearGradient( x1: 0, y1: 0,
+                             x2: 1, y2: 0, 
+                            stop: 0 #6a11cb,
+                            stop: 1 #2575fc ); 
+}
+
+
+#HappyFisherProgressBar::chunk {
+    background: QLinearGradient( x1: 0, y1: 0,
+                             x2: 1, y2: 0, 
+                            stop: 0 #89f7fe,
+                            stop: 1 #66a6ff ); 
+}
+
+
+#TransmitProgressBar::chunk {
+    background: QLinearGradient( x1: 0, y1: 0,
+                             x2: 1, y2: 0, 
+                            stop: 0 #84fab0,
+                            stop: 1 #8fd3f4 );
+}
+
+QLabel#FileInfo {
+    border: 0.5px solid #8fd3f4;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 10px;
+    margin: 0;
+}
+
+QLabel#StatsInfo {
+    border: 0.5px solid #8fd3f4;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    margin: 0;
+}
+
+QLabel#Clock {
+    border: 0.5px solid #8fd3f4;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    margin: 0;
+}
+
+QTableView#DataModelTable {
+    border: 0.5px solid #8fd3f4;
+}
+
+QGroupBox { 
+    border: 0.5px solid #8fd3f4;
+}
+
+QGroupBox#StatGroupbox {
+    border-style: none;
+}
+
+
 QScrollBar:horizontal {
      border: 1px solid #222222;
      background: QLinearGradient( x1: 0, y1: 0, x2: 0, y2: 1, stop: 0.0 #121212, stop: 0.2 #282828, stop: 1 #484848);
@@ -358,19 +445,7 @@ QMenu::separator
     margin-right: 5px;
 }
 
-QProgressBar
-{
-    border: 2px solid grey;
-    border-radius: 5px;
-    text-align: center;
-}
 
-QProgressBar::chunk
-{
-    background-color: #d7801a;
-    width: 2.15px;
-    margin: 0.5px;
-}
 
 QTabBar::tab {
     color: #b1b1b1;
