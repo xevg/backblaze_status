@@ -1,30 +1,37 @@
-import asyncio
 import sys
-from importlib.metadata import version
 from pathlib import Path
-
-import click
-import rich.traceback
-from rich.console import Console
-from PyQt6.QtWidgets import QApplication
-
+from importlib.metadata import version
 
 import qdarktheme
-from qt_backup_status import QTBackupStatus
+import rich.traceback
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QIcon
+from .bz_lastfilestransmitted import BzLastFilesTransmitted
+from .to_do_files import ToDoFiles
+
+from .qt_backup_status import QTBackupStatus
 
 # read version from installed package
-# __version__ = version("securityspy_tools")
+__version__ = version("backblaze_status")
 
-# rich.traceback.install(show_locals=False)
+rich.traceback.install(show_locals=False)
 
 
-app = QApplication(sys.argv)
-qdarktheme.setup_theme()
-# from .movefiles_qt import MainWindow
+def test_app():
+    app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon("backblaze_status.png"))
+    qdarktheme.setup_theme()
 
-# window = MainWindow()
-# window.show()
-# app.exec()
+    QTBackupStatus(gui_test=False)
+    app.exec()
+    sys.exit()
 
-QTBackupStatus()
-app.exec()
+
+def run():
+    test_app()
+
+
+if __name__ == "__main__":
+    run()
+
+# run()
