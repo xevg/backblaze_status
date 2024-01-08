@@ -1,8 +1,12 @@
 import re
+import select
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from io import TextIOWrapper
 from pathlib import Path
+
+from icecream import ic
 
 from .backup_file import BackupFile
 from .bz_log_file_watcher import BzLogFileWatcher
@@ -10,14 +14,6 @@ from .main_backup_status import BackupStatus
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
 from .utils import MultiLogger, get_lock, return_lock
-from icecream import ic
-import select
-from datetime import datetime
-
-ic.configureOutput(
-    includeContext=True, prefix=datetime.now().strftime("%Y-%m-%d %H:%M:S")
-)
-ic.disable()
 
 
 @dataclass
@@ -100,23 +96,16 @@ class BzPrepare(BzLogFileWatcher):
             try:
                 pre_stat = _log_file.stat()
                 self.file_size = pre_stat.st_size
-                # ic.enable()
+
                 ic(f"Starting to read {_log_file}")
                 backup_file: BackupFile = self.backup_list.current_file
                 while not backup_file:
                     time.sleep(1)
                     backup_file: BackupFile = self.backup_list.current_file
 
-                ic(
-                    f"Previous file: {self.previous_file}, this file: {backup_file.file_name}"
-                )
-                ic.disable()
                 while str(backup_file.file_name) == self.previous_file:
                     time.sleep(1)
                     backup_file: BackupFile = self.backup_list.current_file
-                    ic(
-                        f"Slept and tried again - Previous file: {self.previous_file}, this file: {backup_file.file_name}"
-                    )
 
                 self.previous_file = str(backup_file.file_name)
                 # TODO: Do soemthing to determine that the current file is not the previous file, and if it
@@ -126,9 +115,7 @@ class BzPrepare(BzLogFileWatcher):
                     for _line in self._tail_file(_log_fd):
                         self._process_line(_line)
 
-                # ic.enable()
                 ic(f"Log file ended")
-                ic.disable()
                 _log_file = self._get_latest_logfile_name()
             except FileNotFoundError:
                 # This is expected
@@ -156,9 +143,3 @@ class BzPrepare(BzLogFileWatcher):
             self.backup_status.qt.signals.update_prepare.emit(
                 str(backup_file.file_name), chunk_num
             )
-            # print(
-            #     f"Set status of {backup_file.file_name} for chunk {chunk_num} to prepared"
-            # )
-            # self.qt.signals.update_chunk_preparing.emit(
-            #    f"Preparing {str(self.backup_list.current_file.file_name)} ({chunk_num:,})"
-            # )
