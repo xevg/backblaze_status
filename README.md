@@ -20,6 +20,8 @@ Interested in contributing? Check out the contributing guidelines. Please note t
 
 `backblaze_status` was created by Xev Gittler. It is licensed under the terms of the MIT license.
 
+<a href="https://www.flaticon.com/free-icons/send" title="send icons">Send icons created by Prosymbols Premium - Flaticon</a>
+
 ## Credits
 
 `backblaze_status` was created with [`cookiecutter`](https://cookiecutter.readthedocs.io/en/latest/) and the `py-pkgs-cookiecutter` [template](https://github.com/py-pkgs/py-pkgs-cookiecutter).
