@@ -32,6 +32,7 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
     _current_filename: Path | None = field(default=None, init=False)
     _first_pass: bool = field(default=True, init=False)
     _batch: BzBatch | None = field(default=None, init=False)
+    _file_size: int = field(default=0, init=False)
     BZ_LOG_DIR: str = field(
         default="/Library/Backblaze.bzpkg/bzdata/bzlogs/bzreports_lastfilestransmitted/",
         init=False,
@@ -64,7 +65,7 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
                         last_file = _file
         return last_file
 
-    def _process_line(self, _line: str) -> None:
+    def _process_line(self, _line: str, _tell: int) -> None:
         _filename: str | None = None
         _bytes: int = 0
         _rate: str | None = None
@@ -249,6 +250,8 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         #  especially if I'm catching up on the file, I throw a little delay in so that I don't overwhelm
         #  the GUI event loop
         if self.qt:
+            if _tell < self._file_size:
+                return
             time.sleep(0.1)
             self.qt.signals.update_log_line.emit(_filename)
 
@@ -262,6 +265,8 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
                 break
 
         _log_file = self._get_latest_logfile_name()
+        pre_stat = _log_file.stat()
+        self._file_size = pre_stat.st_size
         self._current_filename = _log_file
         while True:
             if _log_file is None:
@@ -274,16 +279,15 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
                 with _log_file.open("r") as _log_fd:
                     self._multi_log.log(f"Reading file {_log_file}")
                     for _line in self._tail_file(_log_fd):
-                        self._process_line(_line)
+                        tell = _log_fd.tell()
+                        self._process_line(_line, tell)
 
+                    self.first_pass = False
                     _log_file = self._get_latest_logfile_name()
                     self._current_filename = _log_file
 
     def _tail_file(self, _file) -> str:
         while True:
-            if self._first_pass and self.go_to_end:
-                _file.seek(0, 2)
-
             _line = _file.readline()
 
             if not _line:
