@@ -8,7 +8,7 @@
 
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFontDatabase
+from PyQt6.QtGui import QFontDatabase, QAction
 from PyQt6.QtWidgets import (
     QLabel,
     QFrame,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QSizePolicy,
     QMenuBar,
+    QMenu,
     QStatusBar,
     QTableWidget,
     QTableWidgetItem,
@@ -236,10 +237,16 @@ class Ui_MainWindow(object):
         self.main_vertical_container.addWidget(self.progress_groupbox)
 
         MainWindow.setCentralWidget(self.centralwidget)
+
         self.menubar = QMenuBar(parent=MainWindow)
         self.menubar.setGeometry(QtCore.QRect(0, 0, 800, 24))
         self.menubar.setObjectName("menubar")
-        MainWindow.setMenuBar(self.menubar)
+        self.setMenuBar(self.menubar)
+        self.option_menu = self.menubar.addMenu("Options")
+
+        # self.option_menu = QMenu("&Options", self)
+        # self.menubar.addMenu(options)
+
         self.statusbar = QStatusBar(parent=MainWindow)
         self.statusbar.setObjectName("statusbar")
         MainWindow.setStatusBar(self.statusbar)
@@ -325,7 +332,7 @@ class Ui_MainWindow(object):
     def _create_chunk_box(self):
         chunk_groupBox = QGroupBox(self.centralwidget)
         chunk_groupBox.setObjectName("ChunkGroupBox")
-        chunk_groupBox.setMaximumHeight(100)
+        chunk_groupBox.setMaximumHeight(150)
         horizontal = QHBoxLayout(chunk_groupBox)
         horizontal.setObjectName("ChunkBoxHorizontal")
 
@@ -353,6 +360,7 @@ class Ui_MainWindow(object):
 
         self.chunk_table_dialog = QDialog()
         self.chunk_table_dialog.setWindowModality(Qt.WindowModality.NonModal)
+        self.chunk_table_dialog.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         self.chunk_dialog_table = self._create_chunk_table()
 
@@ -378,8 +386,6 @@ class Ui_MainWindow(object):
         chunk_table.verticalHeader().setVisible(False)
         chunk_table.setShowGrid(False)
 
-        chunk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        chunk_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         return chunk_table
 
     def _create_data_model_table(self) -> QTableView:
