@@ -27,6 +27,7 @@ class BzPrepare(BzLogFileWatcher):
     )
     file_size: int = field(default=0, init=False)
     previous_file: str = field(default=None, init=False)
+    first_pass: bool = field(default=True, init=False)
 
     def __post_init__(self):
         self._multi_log = MultiLogger("BzPrepare", terminal=True, qt=self.qt)
@@ -113,7 +114,9 @@ class BzPrepare(BzLogFileWatcher):
                 with _log_file.open("r") as _log_fd:
                     self._multi_log.log(f"Reading file {_log_file}")
                     for _line in self._tail_file(_log_fd):
-                        self._process_line(_line)
+                        tell = _log_fd.tell()
+                        self._process_line(_line, tell)
+                self.first_pass = False
 
                 ic(f"Log file ended")
                 _log_file = self._get_latest_logfile_name()
@@ -121,7 +124,7 @@ class BzPrepare(BzLogFileWatcher):
                 # This is expected
                 time.sleep(1)
 
-    def _process_line(self, _line: str) -> None:
+    def _process_line(self, _line: str, tell: int) -> None:
         #         # 1       +       00000000026c7d44        0000018c0f260c68        10485760        /Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/bzcurrentlargefile/onechunk_seq00000.dat
         results = self.chunk_search_re.search(_line.strip())
         if results is not None:
@@ -140,6 +143,10 @@ class BzPrepare(BzLogFileWatcher):
             backup_file.chunks_prepared.add(chunk_num)
             return_lock(backup_file.lock, "backup_file", "bz_prepare:84", lock_start)
             # ic(f"Preparing {str(backup_file.file_name)} chunk {chunk_num}")
+            if self.first_pass:
+                if tell < self.file_size:
+                    return
+            time.sleep(0.1)
             self.backup_status.qt.signals.update_prepare.emit(
                 str(backup_file.file_name), chunk_num
             )
