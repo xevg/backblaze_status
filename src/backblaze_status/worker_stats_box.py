@@ -33,26 +33,28 @@ class StatsBoxWorker(QObject):
                 f"Transmitted: {to_do.total_transmitted_files:,}"
                 f" / {file_size_string(to_do.total_transmitted_size)}"
             )
-            if to_do.total_files == 0:
+
+            combined_files = to_do.total_duplicate_files + to_do.total_transmitted_files
+            if combined_files == 0:
                 percentage_file_duplicate = 0
             else:
-                percentage_file_duplicate = (
-                    to_do.total_duplicate_files / to_do.total_files
-                )
+                percentage_file_duplicate = to_do.total_duplicate_files / combined_files
 
-            if to_do.total_size == 0:
+            combined_size = to_do.total_duplicate_size + to_do.total_transmitted_size
+            if combined_size == 0:
                 percentage_size_duplicate = 0
             else:
-                percentage_size_duplicate = (
-                    to_do.total_duplicate_size / to_do.total_size
-                )
+                percentage_size_duplicate = to_do.total_duplicate_size / combined_size
 
             file_duplicate_files = (
                 f"Duplicates: {to_do.total_duplicate_files}"
                 f" / {file_size_string(to_do.total_duplicate_size)} "
             )
 
-            percentage_duplicates_string = f"Percentage Duplicate: {percentage_file_duplicate} / ({percentage_size_duplicate:.2%})"
+            percentage_duplicates_string = (
+                f"Percentage Duplicate: {percentage_file_duplicate:.2%}"
+                f" / {percentage_size_duplicate:.2%}"
+            )
 
             text = (
                 f"{total_files}"
