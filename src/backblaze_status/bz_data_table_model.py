@@ -231,7 +231,7 @@ class BzDataTableModel(QAbstractTableModel):
         self.new_file_size = size
         self.showing_new_file = True
         if self.interval_timer is not None:
-            if self.data_list[-1].end_time == 0:
+            if len(self.data_list) > 0 and self.data_list[-1].end_time == 0:
                 self.data_list[-1].end_time = datetime.now()
             self.interval_timer.cancel()
         self.new_file_start_time = datetime.now()
