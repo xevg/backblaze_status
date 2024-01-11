@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 from importlib.metadata import version
 
-import qdarktheme
+# import qdarktheme
 import rich.traceback
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
@@ -20,7 +20,7 @@ rich.traceback.install(show_locals=False)
 def test_app():
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("backblaze_status.png"))
-    qdarktheme.setup_theme()
+#     qdarktheme.setup_theme()
 
     QTBackupStatus(gui_test=False)
     app.exec()
