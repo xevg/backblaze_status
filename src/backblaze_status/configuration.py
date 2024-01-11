@@ -4,9 +4,9 @@ import configparser
 
 
 class Configuration:
-
     gb_divisor = 1000000000
     tb_divisor = 1000000000000
+    default_chunk_size = 10485760
 
     default_feature_flags: dict = {
         "show_progress_bar": {
@@ -57,7 +57,6 @@ class Configuration:
     }
 
     def __init__(self, configuration_file: str = None):
-
         self.gb_divisor = 1000000000
         self.tb_divisor = 1000000000000
 
