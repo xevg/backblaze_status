@@ -83,13 +83,21 @@ class BzTransmit(BzLogFileWatcher):
         # When this matches it means that there a new large file being backed up
         match_result = self.prepare_match_re.match(_line)
         if match_result is not None:
-            _timestamp = _line[0:19]
-            # The transmit file uses UTC time
-            _datetime = (
-                datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
-                .replace(tzinfo=timezone.utc)
-                .astimezone(tz=None)
-            )
+            if _line[4] == "-":
+                # The transmit file uses UTC time
+                _timestamp = _line[0:19]
+                _datetime = (
+                    datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone(tz=None)
+                )
+            else:
+                _timestamp = _line[0:14]
+                _datetime = (
+                    datetime.strptime(_timestamp, "%Y%m%d%H%M%S")
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone(tz=None)
+                )
             chunk = True
             _filename = Path(_line.split(": ")[-1].rstrip())
 
@@ -114,12 +122,19 @@ class BzTransmit(BzLogFileWatcher):
             chunk_number = int(_dedup_search_results.group(1))
             _filename = Path(_line.split(": ")[-1].rstrip())
             _timestamp = _line[0:19]
-            # The transmit file uses UTC time
-            _datetime = (
-                datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
-                .replace(tzinfo=timezone.utc)
-                .astimezone(tz=None)
-            )
+            if _timestamp[4] == "-":
+                # The transmit file uses UTC time
+                _datetime = (
+                    datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone(tz=None)
+                )
+            else:
+                _datetime = (
+                    datetime.strptime(_timestamp, "%Y%m%d%H%M%S")
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone(tz=None)
+                )
 
             if not self.backup_list.exists(str(_filename)):
                 self.backup_list.add_file(
