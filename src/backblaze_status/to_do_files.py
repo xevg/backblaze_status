@@ -6,6 +6,7 @@ from datetime import datetime
 
 from .backup_file import BackupFile
 from .utils import file_size_string, MultiLogger, get_lock, return_lock
+from .configuration import Configuration
 
 
 class NotFound(Exception):
@@ -31,7 +32,6 @@ class ToDoFiles:
     current_file: BackupFile = field(default=None, init=False)
     preparing_file: str = field(default=None, init=False)
     lock: threading.Lock = field(default_factory=threading.Lock, init=False)
-    default_chunk_size: int = field(default=10485760, init=False)
     cache: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self):
@@ -67,8 +67,10 @@ class ToDoFiles:
                 self._remaining_size += todo_file_size
                 self._remaining_files += 1
                 backup = BackupFile(todo_filename, todo_file_size, list_index)
-                if todo_file_size > self.default_chunk_size:
-                    backup.chunks_total = int(todo_file_size / self.default_chunk_size)
+                if todo_file_size > Configuration.default_chunk_size:
+                    backup.chunks_total = int(
+                        todo_file_size / Configuration.default_chunk_size
+                    )
                     backup.large_file = True
                 self._file_list.append(backup)
                 self._file_dict[str(todo_filename)] = backup
@@ -170,7 +172,9 @@ class ToDoFiles:
 
             # _file_size > self.default_chunk_size:  # this is the size of the backblaze chunks
             if is_chunk:
-                _backup.chunks_total = int(_file_size / self.default_chunk_size)
+                _backup.chunks_total = int(
+                    _file_size / Configuration.default_chunk_size
+                )
                 _backup.large_file = True
 
             self.file_list.append(_backup)
@@ -228,7 +232,7 @@ class ToDoFiles:
             if item.large_file:
                 total += (
                     len(item.chunks_deduped) + len(item.chunks_transmitted)
-                ) * self.default_chunk_size
+                ) * Configuration.default_chunk_size
             elif item.completed:
                 total += item.file_size
         self.cache["completed_size"] = total
