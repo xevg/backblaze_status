@@ -11,6 +11,7 @@ from .main_backup_status import BackupStatus
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
 from .utils import MultiLogger, get_lock, return_lock
+from .configuration import Configuration
 
 
 @dataclass
@@ -184,6 +185,11 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         if not chunk:
             self.backup_list.completed(_filename)
 
+        if _rate == "dedup":
+            dedup = True
+        else:
+            dedup = False
+
         # Get the file off of the to_list. I have to lock it so no other thread reads/writes from it while I do
         file_info = self.backup_list.file_dict[str(_filename)]  # type: BackupFile
         lock_start = get_lock(
@@ -194,10 +200,18 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         if _rate:
             _rate = _rate.strip()
             # Keep track of how many files and bytes were deduplicated
-            if _rate == "dedup":
+            if dedup:
+                if chunk:
+                    file_info.deduped_bytes += Configuration.default_chunk_size
+                    _bytes = Configuration.default_chunk_size
+                else:
+                    file = Path(_filename[15:])
+                    file_info.deduped_bytes += file.stat().st_size
+                    _bytes = Configuration.default_chunk_size
+
                 self._dedups += 1
                 file_info.dedup_count += 1
-                file_info.deduped_bytes += _bytes
+                # file_info.deduped_bytes += _bytes
                 file_info.dedup_current = True
             else:
                 file_info.transmitted_bytes += _bytes
@@ -250,13 +264,20 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         _log_file = self._get_latest_logfile_name()
         self._current_filename = _log_file
         while True:
-            with _log_file.open("r") as _log_fd:
-                self._multi_log.log(f"Reading file {_log_file}")
-                for _line in self._tail_file(_log_fd):
-                    self._process_line(_line)
+            if _log_file is None:
+                self._multi_log.log(
+                    "No lasttransmitted file, sleeping and trying later",
+                    level=logging.ERROR,
+                )
+                time.sleep(60)
+            else:
+                with _log_file.open("r") as _log_fd:
+                    self._multi_log.log(f"Reading file {_log_file}")
+                    for _line in self._tail_file(_log_fd):
+                        self._process_line(_line)
 
-                _log_file = self._get_latest_logfile_name()
-                self._current_filename = _log_file
+                    _log_file = self._get_latest_logfile_name()
+                    self._current_filename = _log_file
 
     def _tail_file(self, _file) -> str:
         while True:
