@@ -18,13 +18,14 @@ from PyQt6.QtCore import (
     QThreadPool,
     QTimer,
 )
-from PyQt6.QtGui import QColor, QShortcut, QIcon, QPixmap
+from PyQt6.QtGui import QColor, QShortcut, QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QMainWindow,
     QAbstractItemView,
     QAbstractSlider,
     QHeaderView,
+    QDialog, QSizePolicy,
 )
 
 from .backup_file import BackupFile
@@ -36,6 +37,7 @@ from .qt_mainwindow import Ui_MainWindow
 from .utils import MultiLogger, get_lock, return_lock
 from .workers import ProgressBoxWorker, BackupStatusWorker, StatsBoxWorker
 from icecream import ic, install
+from .to_to_dialog import ToDoDialog
 
 ic.configureOutput(
     includeContext=True, prefix=datetime.now().strftime("%Y-%m-%d %H:%M:S")
@@ -166,6 +168,13 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.c_key = QShortcut(Qt.Key.Key_C, self.data_model_table)
         self.c_key.activated.connect(self.c_pressed)
 
+        # Set up Options Menu
+
+        self.show_to_do_button = QAction("&Show To Do List", self)
+        self.show_to_do_button.setStatusTip("Show pop up to do list")
+        self.show_to_do_button.triggered.connect(self.pop_up_todo)
+        self.option_menu.addAction(self.show_to_do_button)
+
     def define_signals(self):
         # self.signals.update_row.connect(self.update_row)
         # self.signals.insert_row.connect(self.insert_row)
@@ -177,6 +186,11 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             self.scroll_bar_moved
         )
         self.progressBar.valueChanged.connect(self.update_progress_bar_percentage)
+
+    def pop_up_todo(self, event):
+        print(f"Clicked {event}")
+        to_do_dialog = ToDoDialog(self.backup_status.to_do)
+        to_do_dialog.exec()
 
     @pyqtSlot()
     def b_pressed(self):
@@ -352,12 +366,13 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
                     self.chunk_table.setRowHeight(row, 5)
             self.chunk_table.resizeRowsToContents()
             self.chunk_table.resizeColumnsToContents()
-            self.chunk_table.setFixedWidth(self.chunk_table.horizontalHeader().length())
-            self.chunk_table.setFixedHeight(self.chunk_table.verticalHeader().length())
             if use_dialog:
                 dialog_width = self.chunk_table.horizontalHeader().length() + 24
                 dialog_height = self.chunk_table.verticalHeader().length() + 24
-                self.chunk_table_dialog.setFixedSize(dialog_width, dialog_height)
+                # self.chunk_table_dialog.setFixedSize(dialog_width, dialog_height)
+            else:
+                self.chunk_table.setFixedWidth(self.chunk_table.horizontalHeader().length())
+                self.chunk_table.setFixedHeight(self.chunk_table.verticalHeader().length())
             self.redraw_chunk_table(current_file)
 
             self.transmit_chunk_progress_bar.hide()
@@ -448,6 +463,8 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             elif current_file.chunks_total < QTBackupStatus.LargeChunkCount:
                 self.chunk_table = self.chunk_box_table
                 use_dialog = False
+                self.chunk_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+                self.chunk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
                 do_chunk_table = True
 
             # If there are more than QTBackupStatus.LargeChunkCount chunks, then pop up a dialog for it
@@ -455,6 +472,8 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
                 self.chunk_table = self.chunk_dialog_table
                 do_chunk_table = True
                 use_dialog = True
+                self.chunk_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+                self.chunk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
             if current_file.chunks_total > 0:
                 # If this a new file that is being processed, then mark the previous file completed
@@ -490,14 +509,6 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
                                 self.chunk_table.setItem(row, column, item)
                                 self.chunk_table.setColumnWidth(column, 5)
                                 self.chunk_table.setRowHeight(row, 5)
-                        self.chunk_table.resizeRowsToContents()
-                        self.chunk_table.resizeColumnsToContents()
-                        self.chunk_table.setFixedWidth(
-                            self.chunk_table.horizontalHeader().length()
-                        )
-                        self.chunk_table.setFixedHeight(
-                            self.chunk_table.verticalHeader().length()
-                        )
                         if use_dialog:
                             dialog_width = (
                                 self.chunk_table.horizontalHeader().length() + 24
@@ -505,9 +516,18 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
                             dialog_height = (
                                 self.chunk_table.verticalHeader().length() + 24
                             )
-                            self.chunk_table_dialog.setFixedSize(
-                                dialog_width, dialog_height
+                            # self.chunk_table_dialog.setFixedSize(
+                            #     dialog_width, dialog_height
+                            # )
+                        else:
+                            self.chunk_table.setFixedWidth(
+                                self.chunk_table.horizontalHeader().length()
                             )
+                            self.chunk_table.setFixedHeight(
+                                self.chunk_table.verticalHeader().length()
+                            )
+                        self.chunk_table.resizeRowsToContents()
+                        self.chunk_table.resizeColumnsToContents()
                         self.redraw_chunk_table(current_file)
 
                     self.prepare_chunk_progress_bar.hide()
