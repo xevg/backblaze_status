@@ -7,6 +7,7 @@ from datetime import datetime
 from .backup_file import BackupFile
 from .utils import file_size_string, MultiLogger, get_lock, return_lock
 from .configuration import Configuration
+from .dev_debug import DevDebug
 
 
 class NotFound(Exception):
@@ -27,18 +28,46 @@ class ToDoFiles:
     _remaining_size: int = field(default=0, init=False)
     _remaining_files: int = field(default=0, init=False)
     _completed_size: int = field(default=0, init=False)
+    _completed_transmitted: int = field(default=0, init=False)
     _completed_files: int = field(default=0, init=False)
     _file_modification_time: float = field(default=0.0, init=False)
-    current_file: BackupFile = field(default=None, init=False)
-    preparing_file: str = field(default=None, init=False)
+    _current_file: BackupFile = field(default=None, init=False)
     lock: threading.Lock = field(default_factory=threading.Lock, init=False)
+    current_file_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False
+    )
     cache: dict = field(default_factory=dict, init=False)
 
     def __post_init__(self):
         self._multi_log = MultiLogger("ToDoFiles", terminal=True)
         self._module_name = self.__class__.__name__
         self._multi_log.log("Creating ToDoFiles")
+        self.debug = DevDebug()
+
+        self._file_dict = dict()
+        self._file_list = list()
+
         self._read()
+        self._start_reread_thread()
+
+    def start_reread_thread(self):
+        pass
+
+    @property
+    def current_file(self) -> BackupFile:
+        return self._current_file
+
+    @current_file.setter
+    def current_file(self, value: BackupFile) -> None:
+        self.debug.print(
+            "lock.to_do", f"acquiring current_file lock for {value.file_name}"
+        )
+        self.current_file_lock.acquire()
+        self._current_file = value
+        self.current_file_lock.release()
+        self.debug.print(
+            "lock.to_do", f"released current_file lock for {value.file_name}"
+        )
 
     def _read(self) -> None:
         """
@@ -52,8 +81,6 @@ class ToDoFiles:
         """
         start_lock = get_lock(self.lock, "todo", "to_do_files:51")
 
-        self._file_dict = dict()
-        self._file_list = list()
         # print("Todo: Lock Acquired")
         file = Path(self.todo_file_name)
         stat = file.stat()
@@ -114,20 +141,21 @@ class ToDoFiles:
         :param filename:
         :return:
         """
-        if filename in self._file_dict:
-            todo_file: BackupFile = self._file_dict[filename]
+        todo_file: BackupFile = self._file_dict.get(filename)
+        if todo_file is None:
+            return
 
-            # invalidate the cache
-            self.cache = dict()
+        # invalidate the cache
+        self.cache = dict()
 
-            if todo_file.completed:
-                return
-            todo_file.completed = True
+        if todo_file.completed:
+            return
+        todo_file.completed = True
 
-            self._completed_size += todo_file.file_size
-            self._remaining_size -= todo_file.file_size
-            self._completed_files += 1
-            self._remaining_files -= 1
+        self._completed_size += todo_file.file_size
+        self._remaining_size -= todo_file.file_size
+        self._completed_files += 1
+        self._remaining_files -= 1
 
     def add_completed_file(self, update_file_size: int) -> None:
         """
@@ -151,8 +179,6 @@ class ToDoFiles:
             # invalidate the cache
             self.cache = dict()
 
-            start_lock = get_lock(self.lock, "todo", "to_do_files:139")
-            # print("Todo:add_file: Lock Acquired")
             list_index = len(self.file_list)
             try:
                 _stat = _filename.stat()
@@ -179,8 +205,6 @@ class ToDoFiles:
 
             self.file_list.append(_backup)
             self.file_dict[str(_filename)] = _backup
-            return_lock(self.lock, "todo", "to_do_files:139", start_lock)
-            # print("Todo:add_file: Lock Released")
 
     def get_remaining(self, start_index: int = 0, number_of_rows: int = 0) -> list:
         start_index += 1
@@ -192,7 +216,7 @@ class ToDoFiles:
                     return
                 yield item
 
-    def todo_files(self, count=20, filename: str = None):
+    def todo_files(self, count=1000000000, filename: str = None):
         """
         Retrieve the next N filenames. If no filename is specified, just start from the beginning of the list.
         If a filename is specified, start from the one after that.
@@ -210,7 +234,7 @@ class ToDoFiles:
 
         for item in self._file_list[starting_index : starting_index + count + 1]:
             if not item.completed:
-                yield f"{counter:>2d}: {item.file_name} ({file_size_string(item.file_size)})"
+                yield item
                 counter += 1
 
     @property
@@ -239,6 +263,23 @@ class ToDoFiles:
         return total
 
     @property
+    def transmitted_size(self) -> int:
+        cached = self.cache.get("transmitted_size")
+        if cached:
+            return cached
+
+        total = 0
+        for item in self._file_list:  # type: BackupFile
+            if item.large_file:
+                total += (
+                    len(item.chunks_transmitted)
+                ) * Configuration.default_chunk_size
+            elif item.completed and not item.dedup_current:
+                total += item.file_size
+        self.cache["transmitted_size"] = total
+        return total
+
+    @property
     def completed_files(self) -> int:
         cached = self.cache.get("completed_files")
         if cached:
@@ -256,6 +297,7 @@ class ToDoFiles:
         cached = self.cache.get("total_size")
         if cached:
             return cached
+
         total = 0
         for item in self._file_list:  # type: BackupFile
             total += item.file_size
@@ -284,10 +326,15 @@ class ToDoFiles:
         cached = self.cache.get("total_duplicate_size")
         if cached:
             return cached
+
         total = 0
         for item in self._file_list:  # type: BackupFile
-            if item.dedup_count > 0:
-                total += item.deduped_bytes
+            if item.large_file:
+                if len(item.chunks_deduped) > 0:
+                    total += len(item.chunks_deduped) * Configuration.default_chunk_size
+            else:
+                if item.dedup_count > 0:
+                    total += item.deduped_bytes
 
         self.cache["total_duplicate_size"] = total
         return total
@@ -312,8 +359,14 @@ class ToDoFiles:
             return cached
         total = 0
         for item in self._file_list:
-            if item.completed and item.dedup_count == 0:
-                total += item.file_size
+            if item.large_file:
+                if len(item.chunks_transmitted) > 0:
+                    total += (
+                        len(item.chunks_transmitted) * Configuration.default_chunk_size
+                    )
+            else:
+                if item.completed and item.dedup_count == 0:
+                    total += item.file_size
 
         self.cache["total_transmitted_size"] = total
         return total
