@@ -4,7 +4,7 @@ from enum import IntEnum
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex
+from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex, pyqtSlot
 from PyQt6.QtGui import QColor
 
 from .backup_file import BackupFile
@@ -42,6 +42,12 @@ class BzDataTableModel(QAbstractTableModel):
         self.new_file_interval: str = str()
         self.interval_timer = None
 
+        if self.qt.backup_status.to_do is None:
+            self.qt.signals.to_do_available.connect(self.to_do_loaded)
+        else:
+            self.update_to_do_cache()
+            self.layoutChanged.emit()
+
         self.column_names = [
             "Time",
             "File Name",
@@ -74,8 +80,10 @@ class BzDataTableModel(QAbstractTableModel):
 
         # Now decide what to do with the last row
         # 1) If we are not showing the new file, show the last row
-        # 2) If we are showing the new file, and it is the same as the last row, show the progress row
-        # 3) If we are showing the new file, and it is *not* the same as the last row, show the last row
+        # 2) If we are showing the new file, and it is the same as the last row,
+        #       show the progress row
+        # 3) If we are showing the new file, and it is *not* the same as the last row,
+        #       show the last row
 
         if row == len(self.data_list) - 1:
             if not self.showing_new_file:
@@ -93,7 +101,8 @@ class BzDataTableModel(QAbstractTableModel):
 
         if row == len(self.data_list):
             if (
-                self.showing_new_file
+                (self.showing_new_file and len(self.data_list) == 0)
+                or self.showing_new_file
                 and self.new_file_name != self.data_list[row - 1].file_name
             ):
                 # There is an extra row, so we need to subtract one
@@ -105,6 +114,11 @@ class BzDataTableModel(QAbstractTableModel):
         # At this point, we are showing the to do list
 
         return self.get_to_do_data_row(role, to_do_row, column)
+
+    @pyqtSlot()
+    def to_do_loaded(self):
+        self.update_to_do_cache()
+        self.layoutChanged.emit()
 
     def get_normal_data_row(self, role, row, column):
         row_data: BackupResults = self.data_list[row]
@@ -219,6 +233,15 @@ class BzDataTableModel(QAbstractTableModel):
 
     def rowCount(self, index: QModelIndex) -> int:
         # Subtract two so that no matter what the way things are, we don't go over
+        if len(self.to_do_cache) == 0:
+            self.update_to_do_cache()
+
+        if len(self.data_list) == 0 and self.showing_new_file:
+            if len(self.to_do_cache) > 2:
+                return 1 + len(self.to_do_cache) - 2
+            else:
+                return 1 + len(self.to_do_cache)
+
         return len(self.data_list) + len(self.to_do_cache) - 2
 
     def columnCount(self, index: QModelIndex) -> int:
@@ -227,7 +250,6 @@ class BzDataTableModel(QAbstractTableModel):
     def show_new_file(self, file: str, size: int):
         # self._data_list.append(["", file, "", "0:00", ""])
         self.new_file_name = file
-        self.qt.backup_status.to_do.preparing_file = file
         self.new_file_size = size
         self.showing_new_file = True
         if self.interval_timer is not None:
@@ -248,13 +270,10 @@ class BzDataTableModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
     def add_row(self, row: BackupResults, chunk=False):
-        # self.beginInsertRows(QModelIndex(), len(self._data_list), 1)
-        # self.lock.acquire()
         current_item = self.qt.backup_status.to_do.file_dict.get(row.file_name)
-        if current_item is not None:
-            self.qt.backup_status.to_do.current_file = current_item
+        if len(self.data_list) > 0:
+            self.data_list[-1].end_time = datetime.now()
         self.data_list.append(row)
-        # self.get_remaining_to_do(retrieve=True)
         if not chunk:
             if self.interval_timer is not None:
                 self.interval_timer.cancel()
@@ -279,19 +298,9 @@ class BzDataTableModel(QAbstractTableModel):
         if not to_do:
             return
 
-        if len(self.data_list) == 0:
-            start_index = 0
-        else:
-            if self.showing_new_file:
-                filename = self.new_file_name
-            else:
-                filename = self.data_list[-1].file_name
-
-            to_do_start_data: BackupFile = to_do.file_dict.get(filename)
-            if to_do_start_data is None:
-                return 0
-
-            start_index = to_do_start_data.list_index
+        start_index = self.get_to_do_start_index()
+        if start_index is None:
+            return
 
         try:
             to_do_cache = self.qt.backup_status.to_do.file_list[
@@ -304,3 +313,21 @@ class BzDataTableModel(QAbstractTableModel):
             del to_do_cache[0]
 
         self.to_do_cache = to_do_cache
+
+    def get_to_do_start_index(self) -> int:
+        to_do: ToDoFiles = self.qt.backup_status.to_do
+        if len(self.data_list) == 0 and not self.showing_new_file:
+            return 0
+        else:
+            if self.showing_new_file:
+                filename = self.new_file_name
+            elif len(self.data_list) > 0:
+                filename = self.data_list[-1].file_name
+            else:
+                return 0
+
+            to_do_start_data: BackupFile = to_do.file_dict.get(filename)
+            if to_do_start_data is None:
+                return 0
+
+            return to_do_start_data.list_index
