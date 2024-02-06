@@ -1,17 +1,12 @@
-import logging
 import os
-from .utils import MultiLogger, file_size_string
-import time
-from .to_do_files import ToDoFiles
-from datetime import datetime
-import sys
-from .backup_results import BackupResults
 import threading
+import time
+
+from .utils import MultiLogger
 
 
 class BackupStatus:
     BZ_DIR = "/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/"
-    check_interval = 10 * 60
 
     def __init__(self, qt=None):
         from .qt_backup_status import QTBackupStatus
@@ -33,10 +28,12 @@ class BackupStatus:
         self.bz_prepare_thread = None
 
     def run(self):
+        from .to_do_files import ToDoFiles
+
         self.to_do_file, self.done_file = self.get_file_list()
-        # self.to_do_file = "/tmp/todo_file"
-        # self.done_file = "/Library/Backblaze.bzpkg/bzdata//bzbackup/bzdatacenter/bz_done_20231225_0.dat"
-        self.to_do = ToDoFiles(self.to_do_file)
+        self.to_do = ToDoFiles(qt=self.qt)
+        if self.qt:
+            self.qt.signals.to_do_available.emit()
 
         # Setup BzLastFileTransmitted Thread
         from .bz_lastfilestransmitted import BzLastFilesTransmitted
@@ -84,15 +81,15 @@ class BackupStatus:
                 if file[:7] == "bz_done":
                     done_file = f"{self.BZ_DIR}/{file}"
 
-            # If there is no to_do file, that is because the backup process is not running,
-            # so we will sleep and try again.
+            # If there is no to_do file, that is because the backup process is not
+            # running, so we will sleep and try again.
             if not to_do_file:
                 self._multi_log.log(
-                    f"Backup not running. Waiting for {int(self.check_interval/ 60)} minutes and trying again ..."
+                    f"Backup not running. Waiting for 1 minute and trying again ..."
                 )
 
                 # TODO: Make this a progress bar ...
-                time.sleep(self.check_interval)
+                time.sleep(60)
 
             else:
                 break

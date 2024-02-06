@@ -268,6 +268,9 @@ QGroupBox#StatGroupbox {
     border-style: none;
 }
 
+QGroupBox#ChunkProgressGroupBox {
+    border-style: none;
+}
 
 QScrollBar:horizontal {
      border: 1px solid #222222;

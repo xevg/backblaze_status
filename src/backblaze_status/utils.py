@@ -26,7 +26,7 @@ def file_size_string(size, sign=False) -> str:
 
     units = ["KB", "MB", "GB", "TB"]
     result = size / DIVISOR_SIZE
-    format_string = "{:.2f} {}" if not sign else "{:+,.2f} {}"
+    format_string = "{:,.2f} {}" if not sign else "{:+,.2f} {}"
 
     for unit in units:
         if abs(result) < DIVISOR_SIZE:
@@ -97,7 +97,6 @@ class MultiLogger:
 
         logger = logging.getLogger(self._app_name)
         logger.setLevel(self._default_log_level)  # Set the log level of the logger
-
         if not logger.handlers:
             try:
                 file_handler = logging.FileHandler(

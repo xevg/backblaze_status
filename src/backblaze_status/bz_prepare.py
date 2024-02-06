@@ -6,14 +6,13 @@ from datetime import datetime
 from io import TextIOWrapper
 from pathlib import Path
 
-from icecream import ic
-
 from .backup_file import BackupFile
 from .bz_log_file_watcher import BzLogFileWatcher
 from .main_backup_status import BackupStatus
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
 from .utils import MultiLogger, get_lock, return_lock
+from .dev_debug import DevDebug
 
 
 @dataclass
@@ -33,6 +32,7 @@ class BzPrepare(BzLogFileWatcher):
         self._multi_log = MultiLogger("BzPrepare", terminal=True, qt=self.qt)
         self._module_name = self.__class__.__name__
         self._multi_log.log("Starting BzPrepare")
+        self.debug: DevDebug = self.qt.debug
 
         # Compile the chunk search regular expression
         self.chunk_search_re = re.compile(r"seq([0-9a-f]+).dat")
@@ -72,7 +72,7 @@ class BzPrepare(BzLogFileWatcher):
                 continue
 
             _line = _file.readline()
-            ic(_line)
+            self.debug.print("bz_prepare.show_line", _line)
             if not _line:
                 time.sleep(1)
                 continue
@@ -91,16 +91,18 @@ class BzPrepare(BzLogFileWatcher):
         _log_file = self._get_latest_logfile_name()
         while True:
             if not _log_file.exists():
-                id(f"{str(_log_file)} not found")
+                # self.debug.print("bz_prepare.log_alert", f"{str(_log_file)} not
+                # found")
                 time.sleep(1)
                 continue
             try:
                 pre_stat = _log_file.stat()
                 self.file_size = pre_stat.st_size
 
-                ic(f"Starting to read {_log_file}")
+                # self.debug.print("bz_prepare.starting", f"Starting to read
+                # {_log_file}")
                 backup_file: BackupFile = self.backup_list.current_file
-                while not backup_file:
+                while backup_file is None:
                     time.sleep(1)
                     backup_file: BackupFile = self.backup_list.current_file
 
@@ -118,7 +120,7 @@ class BzPrepare(BzLogFileWatcher):
                         self._process_line(_line, tell)
                 self.first_pass = False
 
-                ic(f"Log file ended")
+                # self.debug.print("bz_prepare.start", f"Log file ended")
                 _log_file = self._get_latest_logfile_name()
             except FileNotFoundError:
                 # This is expected
@@ -139,14 +141,14 @@ class BzPrepare(BzLogFileWatcher):
                 time.sleep(1)
                 backup_file: BackupFile = self.backup_list.current_file
 
-            lock_start = get_lock(backup_file.lock, "backup_file", "bz_prepare:82")
-            backup_file.chunks_prepared.add(chunk_num)
-            return_lock(backup_file.lock, "backup_file", "bz_prepare:84", lock_start)
-            # ic(f"Preparing {str(backup_file.file_name)} chunk {chunk_num}")
+            backup_file.add_prepared(chunk_num)
+
+            return
+
             if self.first_pass:
                 if tell < self.file_size:
                     return
-            time.sleep(0.1)
+            time.sleep(0.05)
             self.backup_status.qt.signals.update_prepare.emit(
                 str(backup_file.file_name), chunk_num
             )

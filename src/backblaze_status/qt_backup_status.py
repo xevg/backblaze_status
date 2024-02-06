@@ -1,12 +1,10 @@
-import math
+from __future__ import annotations
+
 import os
 import sys
 import time
 from datetime import datetime
-
-from icecream import ic
-
-ic.disable()
+from enum import IntEnum
 
 from PyQt6.QtCore import (
     QObject,
@@ -15,34 +13,28 @@ from PyQt6.QtCore import (
     Qt,
     QCoreApplication,
     QThread,
-    QThreadPool,
     QTimer,
 )
 from PyQt6.QtGui import QColor, QShortcut, QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
-    QTableWidgetItem,
     QMainWindow,
     QAbstractItemView,
     QAbstractSlider,
     QHeaderView,
-    QDialog, QSizePolicy,
 )
 
 from .backup_file import BackupFile
 from .backup_results import BackupResults
 from .bz_data_table_model import BzDataTableModel
+from .chunk_model import ChunkModel
+from .dev_debug import DevDebug
 from .main_backup_status import BackupStatus
 from .progress import ProgressBox
 from .qt_mainwindow import Ui_MainWindow
-from .utils import MultiLogger, get_lock, return_lock
+from .to_do_dialog import ToDoDialog
+from .utils import MultiLogger
 from .workers import ProgressBoxWorker, BackupStatusWorker, StatsBoxWorker
-from icecream import ic, install
-from .to_to_dialog import ToDoDialog
-
-ic.configureOutput(
-    includeContext=True, prefix=datetime.now().strftime("%Y-%m-%d %H:%M:S")
-)
-install()
+from .to_do_files import ToDoFiles
 
 
 class QTBackupStatus(QMainWindow, Ui_MainWindow):
@@ -56,9 +48,9 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         update_clock = pyqtSignal(str)
         update_progress_bar = pyqtSignal(dict)
         update_stats_box = pyqtSignal(str)
-        update_log_line = pyqtSignal(str)
-        update_chunk_preparing = pyqtSignal(str)
-        update_prepare = pyqtSignal(str, int)
+        # update_log_line = pyqtSignal(str)
+        # update_chunk_preparing = pyqtSignal(str)
+        # update_prepare = pyqtSignal(str, int)
         start_new_file = pyqtSignal(str)
 
         interval_timer = pyqtSignal(int)
@@ -70,6 +62,16 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         update_cell = pyqtSignal(int, int, "PyQt_PyObject", "PyQt_PyObject")
         add_data_row = pyqtSignal(list)
         update_disk_table = pyqtSignal()
+        # completed_file = pyqtSignal(str)
+        to_do_available = pyqtSignal()
+
+        preparing = pyqtSignal()
+        transmitting = pyqtSignal(str)
+        # new_large_file = pyqtSignal(str)
+
+    class ProcessingType(IntEnum):
+        PREPARING = 0
+        TRANSMITTING = 1
 
     def __init__(
         self,
@@ -87,6 +89,11 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.test = test
         self.gui_test = gui_test
 
+        self.debug = DevDebug()
+        self.debug.disable("lock")
+        self.debug.disable("bz_prepare.show_line")
+        self.debug.disable("lastfilestransmitted.show_line")
+
         icon_path = os.path.join(
             os.path.dirname(sys.modules[__name__].__file__), "backblaze_status.png"
         )
@@ -100,19 +107,32 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.signals = self.Signals()
         self.define_signals()
 
+        self.previous_file_name = None
+        self.current_file_name = None
         self.large_file_name = None
         self.prepare_file_name = None
         self.display_moved = False
         self.current_last_row: int = 0
         self.in_table: set = set()
-        self.chunk_table = self.chunk_box_table
 
+        self.selected_row: int = -1
+
+        self.large_file_update_timer: QTimer | None = None
+
+        self.processing_type: QTBackupStatus.ProcessingType = (
+            QTBackupStatus.ProcessingType.PREPARING
+        )
+
+        self.to_do_loaded = False
+
+        self.to_do_dialog: ToDoDialog | None = None
+
+        self.setWindowTitle("Backblaze Status")
         # **** Set up threads ****
-
-        self.thread_pool = QThreadPool()
 
         # Clock thread
         self.clock_timer = QTimer()
+        self.clock_timer.setObjectName("Clock Update")
         self.clock_timer.timeout.connect(self.update_clock_display)
         self.clock_timer.start(1000)
 
@@ -120,6 +140,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.backup_status: BackupStatus = BackupStatus(self)
 
         self.backup_status_thread = QThread()
+        self.backup_status_thread.setObjectName("BackupStatusThread")
         self.backup_status_worker: BackupStatusWorker = BackupStatusWorker(
             self.backup_status
         )
@@ -127,8 +148,11 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.backup_status_thread.started.connect(self.backup_status_worker.run)
         self.backup_status_thread.start()
 
+        QThread.sleep(2)  # Just give it a chance to start
+
         # Update Stats Box Thread
         self.update_stats_box_thread = QThread()
+        self.update_stats_box_thread.setObjectName("UpdateStatsBox")
         self.update_stats_box_worker: StatsBoxWorker = StatsBoxWorker(
             self.backup_status
         )
@@ -143,6 +167,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.progress_box = ProgressBox(self.backup_status)
 
         self.progress_box_thread = QThread()
+        self.progress_box_thread.setObjectName("ProgressBox")
         self.progress_box_worker: ProgressBoxWorker = ProgressBoxWorker(
             self.progress_box
         )
@@ -157,6 +182,16 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             1, QHeaderView.ResizeMode.Stretch
         )
 
+        # Update Chunk Box
+        self.chunk_box_timer = QTimer()
+        self.chunk_box_timer.setObjectName("ChunkBoxUpdate")
+        self.chunk_box_timer.timeout.connect(self.update_chunk_progress)
+        self.chunk_box_timer.start(100)
+
+        self.chunk_model = ChunkModel(self)
+        self.chunk_box_table.setModel(self.chunk_model)
+        self.chunk_dialog_table.setModel(self.chunk_model)
+
         # Set up key shortcuts
 
         self.b_key = QShortcut(Qt.Key.Key_B, self.data_model_table)
@@ -168,29 +203,48 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.c_key = QShortcut(Qt.Key.Key_C, self.data_model_table)
         self.c_key.activated.connect(self.c_pressed)
 
+        self.data_model_table.clicked.connect(self.toggle_selection)
+
         # Set up Options Menu
 
         self.show_to_do_button = QAction("&Show To Do List", self)
         self.show_to_do_button.setStatusTip("Show pop up to do list")
         self.show_to_do_button.triggered.connect(self.pop_up_todo)
         self.option_menu.addAction(self.show_to_do_button)
+        self.show_to_do_button.setDisabled(True)
 
     def define_signals(self):
         # self.signals.update_row.connect(self.update_row)
         # self.signals.insert_row.connect(self.insert_row)
-        self.signals.update_log_line.connect(self.update_log_line)
-        self.signals.update_chunk_preparing.connect(self.update_chunk_preparing)
-        self.signals.update_prepare.connect(self.update_prepare)
+        # self.signals.update_log_line.connect(self.update_log_line)
+        # self.signals.update_chunk_preparing.connect(self.update_chunk_preparing)
+        # self.signals.update_prepare.connect(self.update_prepare)
         self.signals.start_new_file.connect(self.start_new_file)
+        self.signals.preparing.connect(self.set_preparing)
+        self.signals.transmitting.connect(self.set_transmitting)
+        # self.signals.new_large_file.connect(self.new_large_file)
+        # self.signals.completed_file.connect(self.complete_file)
+        self.chunk_show_dialog_button.clicked.connect(self.show_chunk_dialog)
+
         self.data_model_table.verticalScrollBar().actionTriggered.connect(
             self.scroll_bar_moved
         )
         self.progressBar.valueChanged.connect(self.update_progress_bar_percentage)
 
+    @pyqtSlot()
+    def show_chunk_dialog(self):
+        print("Show chunk button clicked")
+        self.chunk_show_dialog_button.activateWindow()
+        self.chunk_show_dialog_button.raise_()
+
     def pop_up_todo(self, event):
         print(f"Clicked {event}")
-        to_do_dialog = ToDoDialog(self.backup_status.to_do)
-        to_do_dialog.exec()
+        if self.to_do_dialog is None:
+            self.to_do_dialog = ToDoDialog(self.result_data)
+            self.to_do_dialog.exec()
+        else:
+            self.to_do_dialog.reset_list()
+            self.to_do_dialog.setVisible(True)
 
     @pyqtSlot()
     def b_pressed(self):
@@ -237,28 +291,12 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             hint=QAbstractItemView.ScrollHint.PositionAtCenter,
         )
 
-    """
-    For some reason, keyPressEvent didn't work, so I used shortcuts instead
-    
-    def keyPressEvent(self, event):
-        print(f"Key {event} pressed")
-        if event.key() == Qt.Key.Key_B:
-            print("B key pressed")
+    def toggle_selection(self, e):
+        if e.row() == self.selected_row:
             self.data_model_table.clearSelection()
-            self.display_moved = False
-            self.data_model_table.scrollToBottom()
-        elif event.key() == Qt.Key.Key_T:
-            print("T key pressed")
-            self.data_model_table.selectRow(0)
-            self.data_model_table.scrollToItem(self.data_model_table.item(0, 0))
-        elif event.key() == Qt.Key.Key_C:
-            selected_items = self.data_model_table.selectedItems()
-            if len(selected_items) > 0:
-                self.data_model_table.scrollToItem(
-                    selected_items[0],
-                    hint=QAbstractItemView.ScrollHint.PositionAtCenter,
-                )
-    """
+            self.selected_row = -1
+        else:
+            self.selected_row = e.row()
 
     def scroll_bar_moved(self, event):
         """
@@ -277,6 +315,8 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
     @pyqtSlot(str)
     def update_stats_box(self, text: str):
         self.stats_info.setText(text)
+        self.to_do_loaded = True
+        self.show_to_do_button.setDisabled(False)
 
     @pyqtSlot(dict)
     def update_progress_box(self, values: dict):
@@ -297,322 +337,195 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         )
         self.progressBar.setFormat(f"{percentage:.2%}")
 
-    @pyqtSlot(str)
-    def update_chunk_preparing(self, line: str):
-        self.file_info.setText(line)
-
-    def update_chunk_table(self, chunk, current_file):
-        rows_columns = math.ceil(math.sqrt(current_file.chunks_total))
-        chunk_row = math.floor(chunk / rows_columns)
-        chunk_column = chunk % rows_columns
-        chunk_item = QTableWidgetItem("")
-        # self.chunk_table.item(chunk_row, chunk_column)
-        if chunk in current_file.chunks_deduped:
-            chunk_item.setBackground(QColor("sandybrown"))
-        elif chunk in current_file.chunks_transmitted:
-            chunk_item.setBackground(QColor("#84fab0"))
-        elif chunk in current_file.chunks_prepared:
-            chunk_item.setBackground(QColor("#6a11cb"))
-        self.chunk_table.setItem(chunk_row, chunk_column, chunk_item)
-
-    @pyqtSlot(str, int)
-    def update_prepare(self, filename: str, chunk_num: int):
-        ic("In update_prepare")
-        current_file: BackupFile = self.backup_status.to_do.file_dict.get(filename)
+    @pyqtSlot()
+    def set_preparing(self):
+        to_do = self.backup_status.to_do  # type: ToDoFiles
+        current_file: BackupFile = to_do.get_file(self.large_file_name)
         if current_file is None:
             return
 
-        self.prepare_chunk_progress_bar.show()
-        self.transmit_chunk_progress_bar.hide()
-        current_chunk = current_file.chunk_current
+        self.processing_type = QTBackupStatus.ProcessingType.PREPARING
+        self.backup_status.to_do.current_file = current_file
 
-        # Figure out how big the table needs to be. Getting the square room gives
-        # the number of rows and columns needed to make a square
-        rows_columns = math.ceil(math.sqrt(current_file.chunks_total))
-
-        # If there are less than QTBackupStatus.SmallChunkCount chunks, it is too small and
-        # goes too fast to bother displaying the chunk table
-        if current_file.chunks_total < QTBackupStatus.SmallChunkCount:
-            return
-
-        # If there are between QTBackupStatus.SmallChunkCount and QTBackupStatus.LargeChunkCount
-        # chunks, then show the chunk table inline
-        if current_file.chunks_total < QTBackupStatus.LargeChunkCount:
-            self.chunk_table = self.chunk_box_table
-            use_dialog = False
-
-        # If there are more than QTBackupStatus.LargeChunkCount chunks, then pop up a dialog for it
-        else:
-            self.chunk_table = self.chunk_dialog_table
-            use_dialog = True
-
-        if self.prepare_file_name != filename:
-            self.prepare_file_name = filename
-
-            # For a new file, clear the chunk table, set the column and row count
-            # appropriately, and set the size of the table
-
-            self.chunk_table.clear()
-            self.chunk_table.setColumnCount(rows_columns)
-            self.chunk_table.setRowCount(rows_columns)
-            max_size = (rows_columns * QTBackupStatus.PixelSize) + 5
-            self.chunk_table.setMaximumSize(max_size, max_size)
-            for row in range(rows_columns):
-                for column in range(rows_columns):
-                    item = QTableWidgetItem("")
-                    item.setBackground(QColor("linen"))
-                    self.chunk_table.setItem(row, column, item)
-                    self.chunk_table.setColumnWidth(column, 5)
-                    self.chunk_table.setRowHeight(row, 5)
-            self.chunk_table.resizeRowsToContents()
-            self.chunk_table.resizeColumnsToContents()
-            if use_dialog:
-                dialog_width = self.chunk_table.horizontalHeader().length() + 24
-                dialog_height = self.chunk_table.verticalHeader().length() + 24
-                # self.chunk_table_dialog.setFixedSize(dialog_width, dialog_height)
-            else:
-                self.chunk_table.setFixedWidth(self.chunk_table.horizontalHeader().length())
-                self.chunk_table.setFixedHeight(self.chunk_table.verticalHeader().length())
-            self.redraw_chunk_table(current_file)
-
-            self.transmit_chunk_progress_bar.hide()
-            self.prepare_chunk_progress_bar.show()
-            self.prepare_chunk_progress_bar.setMinimum(0)
-            self.prepare_chunk_progress_bar.setMaximum(current_file.chunks_total)
-            self.chunk_box.show()
-            self.reposition_table()  # Since the bottom moved
-            if use_dialog:
-                self.chunk_table_dialog.setWindowTitle(str(filename))
-                self.chunk_table_dialog.show()
-            else:
-                self.chunk_table.show()
-            self.file_info.hide()
-
-        # Draw the state if the current duplicate block
-        ic(self.update_chunk_table(chunk_num, current_file))
-
-        # At intervals, we should redraw all the dots, because sometimes they get out of sync
-        if chunk_num % 100 == 0:
-            self.redraw_chunk_table(current_file)
-
-        # There is progressbar for large files, so update that
-        self.prepare_chunk_progress_bar.setValue(len(current_file.chunks_prepared))
-
-        self.chunk_filename.setText(
-            f"Preparing: {filename} ({chunk_num:,} / {current_file.chunks_total:,} chunks)"
-        )
-
-    def redraw_chunk_table(self, current_file: BackupFile) -> None:
-        """
-        Redraw the chunk table with new data
-        """
-
-        lock_start = get_lock(
-            current_file.lock,
-            f"BackupFile ({current_file.file_name})",
-            "qt_backup_status:370",
-        )
-        prepared = current_file.chunks_prepared.copy()
-        deduped = current_file.chunks_deduped.copy()
-        transmitted = current_file.chunks_transmitted.copy()
-        return_lock(
-            current_file.lock,
-            f"BackupFile ({current_file.file_name})",
-            "qt_backup_status:294",
-            lock_start,
-        )
-
-        self.chunk_table.clearContents()
-        for set_chunk in prepared:
-            self.update_chunk_table(set_chunk, current_file)
-        for set_chunk in deduped:
-            self.update_chunk_table(set_chunk, current_file)
-        for set_chunk in transmitted:
-            self.update_chunk_table(set_chunk, current_file)
+        self.prepare_chunk_progress_bar.setMinimum(0)
+        self.prepare_chunk_progress_bar.setMaximum(current_file.chunks_total)
+        self.initialize_chunk_table()
+        self.chunk_box.show()
+        self.reposition_table()  # Since the bottom moved
+        self.file_info.hide()
 
     @pyqtSlot(str)
-    def update_log_line(self, filename: str):
-        current_file: BackupFile = self.backup_status.to_do.file_dict[filename]
-        self.backup_status.to_do.current_file = current_file
-        default_color = QColor("white")
+    def set_transmitting(self, filename: str):
+        to_do: ToDoFiles = self.backup_status.to_do
+        current_file: BackupFile = to_do.get_file(filename)
+        if current_file is None:
+            return
 
-        if current_file.dedup_current:
-            label_color = QColor("orange")
-        else:
-            label_color = default_color
-        label_string = str(current_file.file_name)
+        to_do.current_file = current_file
+        self.processing_type = QTBackupStatus.ProcessingType.TRANSMITTING
+        self.result_data.show_new_file(filename, current_file.file_size)
 
-        self.prepare_chunk_progress_bar.hide()
-        self.transmit_chunk_progress_bar.show()
-        self.file_info.setText(f"Processed {label_string}")
-
-        use_dialog = True
         if current_file.large_file:
-            current_chunk = current_file.chunk_current
-            # Figure out how big the table needs to be. Getting the square room gives
-            # the number of rows and columns needed to make a square
-            rows_columns = math.ceil(math.sqrt(current_file.chunks_total))
-
-            # If there are less than QTBackupStatus.SmallChunkCount chunks, it is too small and
-            # goes too fast to bother displaying the chunk table
-            if current_file.chunks_total < QTBackupStatus.SmallChunkCount:
-                do_chunk_table = False
-
-            # If there are between QTBackupStatus.SmallChunkCount and QTBackupStatus.LargeChunkCount
-            # chunks, then show the chunk table inline
-            elif current_file.chunks_total < QTBackupStatus.LargeChunkCount:
-                self.chunk_table = self.chunk_box_table
-                use_dialog = False
-                self.chunk_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                self.chunk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-                do_chunk_table = True
-
-            # If there are more than QTBackupStatus.LargeChunkCount chunks, then pop up a dialog for it
-            else:
-                self.chunk_table = self.chunk_dialog_table
-                do_chunk_table = True
-                use_dialog = True
-                self.chunk_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-                self.chunk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-
-            if current_file.chunks_total > 0:
-                # If this a new file that is being processed, then mark the previous file completed
-                # and add the rows
-                if self.large_file_name != filename:
-                    self.backup_status.to_do.completed(self.large_file_name)
-                    self.large_file_name = filename
-
-                    row_result = BackupResults(
-                        timestamp=current_file.timestamp,
-                        file_name=label_string,
-                        file_size=current_file.file_size,
-                        start_time=datetime.now(),
-                        rate=current_file.rate,
-                        row_color=QColor(label_color),
-                    )
-                    self.result_data.add_row(row_result, chunk=True)
-                    self.reposition_table()
-
-                    # For a new file, clear the chunk table, set the column and row count
-                    # appropriately, and set the size of the table
-
-                    if do_chunk_table:
-                        self.chunk_table.clear()
-                        self.chunk_table.setColumnCount(rows_columns)
-                        self.chunk_table.setRowCount(rows_columns)
-                        max_size = (rows_columns * QTBackupStatus.PixelSize) + 5
-                        self.chunk_table.setMaximumSize(max_size, max_size)
-                        for row in range(rows_columns):
-                            for column in range(rows_columns):
-                                item = QTableWidgetItem("")
-                                item.setBackground(QColor("linen"))
-                                self.chunk_table.setItem(row, column, item)
-                                self.chunk_table.setColumnWidth(column, 5)
-                                self.chunk_table.setRowHeight(row, 5)
-                        if use_dialog:
-                            dialog_width = (
-                                self.chunk_table.horizontalHeader().length() + 24
-                            )
-                            dialog_height = (
-                                self.chunk_table.verticalHeader().length() + 24
-                            )
-                            # self.chunk_table_dialog.setFixedSize(
-                            #     dialog_width, dialog_height
-                            # )
-                        else:
-                            self.chunk_table.setFixedWidth(
-                                self.chunk_table.horizontalHeader().length()
-                            )
-                            self.chunk_table.setFixedHeight(
-                                self.chunk_table.verticalHeader().length()
-                            )
-                        self.chunk_table.resizeRowsToContents()
-                        self.chunk_table.resizeColumnsToContents()
-                        self.redraw_chunk_table(current_file)
-
-                    self.prepare_chunk_progress_bar.hide()
-                    self.transmit_chunk_progress_bar.show()
-                    self.transmit_chunk_progress_bar.setMinimum(0)
-                    self.transmit_chunk_progress_bar.setMaximum(
-                        current_file.chunks_total
-                    )
-                    self.chunk_box.show()
-                    self.reposition_table()  # Since the bottom moved
-                    if do_chunk_table:
-                        if use_dialog:
-                            self.chunk_table_dialog.setWindowTitle(str(filename))
-                            self.chunk_table_dialog.show()
-                        else:
-                            self.chunk_table.show()
-                    self.file_info.hide()
-
-                # Draw the state if the current duplicate block
-                i = current_chunk
-                if do_chunk_table:
-                    self.update_chunk_table(i, current_file)
-
-                    # At intervals, we should redraw all the dots, because sometimes they get out of sync
-                    if i % 100 == 0:
-                        self.redraw_chunk_table(current_file)
-
-                # There is progressbar for large files, so update that
-                self.transmit_chunk_progress_bar.setValue(
-                    len(current_file.chunks_transmitted)
-                    + len(current_file.chunks_deduped)
-                )
-
-                # self.chunk_progress_bar.setStyleSheet(style_sheet)
-                self.chunk_filename.setText(
-                    f"Transmitting: {filename} ({i:>4,} / {current_file.chunks_total:,} chunks)"
-                )
-
-            else:
-                self.chunk_box.hide()
-                self.chunk_table_dialog.hide()
-                self.file_info.show()
-                if current_file.chunks_total == 0:
-                    percentage = 0
-                else:
-                    percentage = (
-                        len(current_file.chunks_transmitted) / current_file.chunks_total
-                    )
-
-                chunk_label_string = (
-                    f"Transmitting: {label_string} - Chunk {current_chunk:,d}"
-                    f" of {current_file.chunks_total:,d} ({percentage:2.1%})"
-                )
-                self.file_info.setText(chunk_label_string)
+            self.large_file_name = filename
+            self.chunk_model.filename = filename
+            self.transmit_chunk_progress_bar.setMinimum(0)
+            self.transmit_chunk_progress_bar.setMaximum(current_file.chunks_total)
+            self.initialize_chunk_table()
+            self.chunk_box.show()
+            self.reposition_table()  # Since the bottom moved
         else:
-            # If it's not a large file, hide the chunk box and treat it normally
-
             self.chunk_box.hide()
             self.chunk_table_dialog.hide()
             self.file_info.show()
-            if self.large_file_name is not None:
-                self.backup_status.to_do.completed(self.large_file_name)
-                self.large_file_name = None
 
-            self.file_info.setText(f"Processing file: '{filename}")
-            self.backup_status.to_do.completed(filename)
+    @pyqtSlot()
+    def initialize_chunk_table(self):
+        to_do: ToDoFiles = self.backup_status.to_do
+        current_file: BackupFile = to_do.get_file(self.chunk_model.filename)
+        if current_file is None or self.chunk_model.table_size == 0:
+            self.chunk_show_dialog_button.setText("Table not ready yet")
+            self.chunk_show_dialog_button.setDisabled(True)
+            self.chunk_show_dialog_button.show()
+            self.chunk_model.reset_table()
+            timer = QTimer()
+            timer.setSingleShot(True)
+            timer.start(10000)  # 10 seconds
+            timer.timeout.connect(self.initialize_chunk_table)
+            return
 
-            row_result = BackupResults(
-                timestamp=current_file.timestamp,
-                file_name=label_string,
-                file_size=current_file.file_size,
-                rate=current_file.rate,
-                row_color=QColor(label_color),
+        if self.chunk_model.use_dialog:
+            self.chunk_dialog_table.setVerticalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded
             )
-            self.result_data.add_row(row_result)
-            self.data_model_table.resizeRowsToContents()
+            self.chunk_dialog_table.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            )
+
+            self.chunk_table_dialog.setWindowTitle(self.chunk_model.filename)
+            self.chunk_table_dialog.show()
+            self.chunk_dialog_table.show()
+            self.chunk_box_table.hide()
+            self.chunk_show_dialog_button.show()
+            self.chunk_show_dialog_button.setEnabled(True)
+
+            self.chunk_dialog_table.resizeRowsToContents()
+            self.chunk_dialog_table.resizeColumnsToContents()
+
+            self.chunk_dialog_table.setVerticalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+            self.chunk_dialog_table.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+
+            self.chunk_dialog_table.setFixedWidth(
+                self.chunk_box_table.horizontalHeader().length()
+            )
+            self.chunk_dialog_table.setFixedHeight(
+                self.chunk_box_table.verticalHeader().length()
+            )
+        else:
+            self.chunk_box_table.setVerticalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+            self.chunk_box_table.setHorizontalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+
+            self.chunk_box_table.setFixedWidth(
+                self.chunk_box_table.horizontalHeader().length()
+            )
+            self.chunk_box_table.setFixedHeight(
+                self.chunk_box_table.verticalHeader().length()
+            )
+            # @@@ self.chunk_box_table.show()
+            self.chunk_table_dialog.hide()
+            self.chunk_show_dialog_button.hide()
+
+            self.chunk_box_table.resizeRowsToContents()
+            self.chunk_box_table.resizeColumnsToContents()
+
+    def update_chunk_progress(self):
+        to_do: ToDoFiles = self.backup_status.to_do
+        if to_do is None or to_do.current_file is None:
+            return
+
+        current_file: BackupFile = to_do.current_file
+        if current_file is None:
+            return
+
+        if self.processing_type == QTBackupStatus.ProcessingType.TRANSMITTING:
+            # There is progressbar for large files, so update that
+            max_transmitted = current_file.max_transmitted
+            max_deduped = current_file.max_deduped
+
+            self.transmit_chunk_progress_bar.setValue(
+                max([max_deduped, max_transmitted])
+            )
+
+            # self.chunk_progress_bar.setStyleSheet(style_sheet)
+            self.chunk_filename.setText(
+                f"Transmitting: {str(current_file.file_name)}"
+                f" ({current_file.current_chunk:>4,} /"
+                f" {current_file.chunks_total:,} chunks)"
+            )
+
+        if self.processing_type == QTBackupStatus.ProcessingType.PREPARING:
+            # There is progressbar for large files, so update that
+            self.prepare_chunk_progress_bar.setValue(current_file.max_prepared)
+
+            # self.chunk_progress_bar.setStyleSheet(style_sheet)
+            self.chunk_filename.setText(
+                f"Preparing: {str(current_file.file_name)}"
+                f" ({current_file.current_chunk:>4,} /"
+                f" {current_file.chunks_total:,} chunks)"
+            )
 
     @pyqtSlot(str)
     def start_new_file(self, file_name: str):
         self.chunk_box.hide()
         self.file_info.show()
+
         self.file_info.setText(f"Preparing new file {file_name}")
-        current_file: BackupFile = self.backup_status.to_do.file_dict[file_name]
-        if current_file is None:
-            file_size = 0
+        if self.previous_file_name is None:
+            self.previous_file_name = file_name
+        elif self.previous_file_name != file_name:
+            to_do: ToDoFiles = self.backup_status.to_do
+            previous_file: BackupFile = to_do.get_file(self.previous_file_name)
+            if previous_file is not None:
+                to_do.completed(self.previous_file_name)
+            default_color = QColor("white")
+            if previous_file is None or previous_file.is_deduped:
+                label_color = QColor("orange")
+            else:
+                label_color = default_color
+
+            row_result = BackupResults(
+                timestamp=previous_file.timestamp,
+                file_name=self.previous_file_name,
+                file_size=previous_file.file_size,
+                rate=previous_file.rate,
+                row_color=QColor(label_color),
+                start_time=datetime.now(),
+            )
+            self.result_data.add_row(row_result, chunk=previous_file.large_file)
+            self.reposition_table()
+            self.previous_file_name = file_name
+
+        to_do: ToDoFiles = self.backup_status.to_do
+        current_file: BackupFile = to_do.get_file(file_name)
+        self.transmit_chunk_progress_bar.setValue(0)
+        self.transmit_chunk_progress_bar.setMaximum(100)
+        self.prepare_chunk_progress_bar.setValue(0)
+        self.prepare_chunk_progress_bar.setMaximum(100)
+
+        if current_file.large_file:
+            self.large_file_name = file_name
+            self.chunk_model.filename = file_name
+            self.initialize_chunk_table()
+            self.set_preparing()
         else:
-            file_size = current_file.file_size
+            self.large_file_name = None
+
+        file_size = current_file.file_size
         self.result_data.show_new_file(file_name, file_size)

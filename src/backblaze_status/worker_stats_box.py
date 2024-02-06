@@ -1,7 +1,6 @@
 from PyQt6.QtCore import QObject, pyqtSignal, QThread
 
 from .main_backup_status import BackupStatus
-from .to_do_files import ToDoFiles
 from .utils import file_size_string
 
 
@@ -21,6 +20,8 @@ class StatsBoxWorker(QObject):
         """
         Update the data in the stats box. This is in a separate thread because it can take a while to do
         """
+        from .to_do_files import ToDoFiles
+
         to_do: ToDoFiles | None = None
         while True:
             if to_do is None:
@@ -30,25 +31,25 @@ class StatsBoxWorker(QObject):
 
             total_files = f"Total Files: {to_do.total_files:,d} / {file_size_string(to_do.total_size)}"
             transmitted_files = (
-                f"Transmitted: {to_do.total_transmitted_files:,}"
-                f" / {file_size_string(to_do.total_transmitted_size)}"
+                f"Transmitted: {to_do.transmitted_files:,}"
+                f" / {file_size_string(to_do.transmitted_size)}"
             )
 
-            combined_files = to_do.total_duplicate_files + to_do.total_transmitted_files
+            combined_files = to_do.duplicate_files + to_do.transmitted_files
             if combined_files == 0:
                 percentage_file_duplicate = 0
             else:
-                percentage_file_duplicate = to_do.total_duplicate_files / combined_files
+                percentage_file_duplicate = to_do.duplicate_files / combined_files
 
-            combined_size = to_do.total_duplicate_size + to_do.total_transmitted_size
+            combined_size = to_do.duplicate_size + to_do.transmitted_size
             if combined_size == 0:
                 percentage_size_duplicate = 0
             else:
-                percentage_size_duplicate = to_do.total_duplicate_size / combined_size
+                percentage_size_duplicate = to_do.duplicate_size / combined_size
 
             file_duplicate_files = (
-                f"Duplicates: {to_do.total_duplicate_files}"
-                f" / {file_size_string(to_do.total_duplicate_size)} "
+                f"Duplicates: {to_do.duplicate_files}"
+                f" / {file_size_string(to_do.duplicate_size)} "
             )
 
             percentage_duplicates_string = (

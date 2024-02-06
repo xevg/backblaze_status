@@ -1,4 +1,5 @@
 from pathlib import Path
+from .locks import Lock
 
 
 class BzBatch:
@@ -7,5 +8,6 @@ class BzBatch:
         self.timestamp: str = timestamp
         self.files: set = set()
 
-    def add_file(self, filename: Path):
-        self.files.add(filename)
+    def add_file(self, filename: str):
+        with Lock.DB_LOCK:
+            self.files.add(filename)

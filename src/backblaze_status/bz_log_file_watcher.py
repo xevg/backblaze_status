@@ -18,9 +18,6 @@ class BzLogFileWatcher(ABC):
 
     def _tail_file(self, _file: TextIOWrapper) -> str:
         while True:
-            if self._first_pass and self.go_to_end:
-                _file.seek(0, 2)
-
             _line = _file.readline()
 
             if not _line:
@@ -41,10 +38,10 @@ class BzLogFileWatcher(ABC):
 
     def read_file(self) -> None:
         while True:
-            if not self.backup_list:
+            if not self.to_do:
                 # Give the main program time to start up and scan the disks
                 time.sleep(10)
-                self.backup_list = self.backup_status.to_do
+                self.to_do = self.backup_status.current_file
             else:
                 break
 
@@ -53,8 +50,11 @@ class BzLogFileWatcher(ABC):
         while True:
             with _log_file.open("r") as _log_fd:
                 self._multi_log.log(f"Reading file {_log_file}")
+                if self._first_pass:
+                    _log_fd.seek(0, 2)
                 for _line in self._tail_file(_log_fd):
                     self._process_line(_line)
 
+                self._first_pass = False
                 _log_file = self._get_latest_logfile_name()
                 self._current_filename = _log_file

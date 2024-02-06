@@ -8,7 +8,7 @@
 
 from PyQt6 import QtCore
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFontDatabase, QAction
+from PyQt6.QtGui import QFontDatabase, QAction, QFont
 from PyQt6.QtWidgets import (
     QLabel,
     QFrame,
@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QAbstractItemView,
     QDialog,
-    QTableView,
+    QTableView, QPushButton,
 )
 
 from .css_styles import CssStyles
@@ -40,7 +40,8 @@ class Ui_MainWindow(object):
         MainWindow.resize(2100, 1000)
 
         # Define the font to use when I need a fixed font
-        self.fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        self.fixed_font = QFont(".SF NS Mono")
+        # QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         self.fixed_font.setPointSize(12)
 
         # The main widget
@@ -336,31 +337,44 @@ class Ui_MainWindow(object):
         horizontal = QHBoxLayout(chunk_groupBox)
         horizontal.setObjectName("ChunkBoxHorizontal")
 
+        chunk_progress_groupBox = QGroupBox(chunk_groupBox)
+        chunk_progress_groupBox.setObjectName("ChunkProgressGroupBox")
+        chunk_progress_layout = QVBoxLayout(chunk_progress_groupBox)
+        chunk_progress_groupBox.setLayout(chunk_progress_layout)
+
+        horizontal.addWidget(chunk_progress_groupBox)
+
         self.transmit_chunk_progress_bar = QProgressBar(chunk_groupBox)
         self.transmit_chunk_progress_bar.setObjectName("TransmitProgressBar")
-        self.transmit_chunk_progress_bar.hide()
-
-        horizontal.addWidget(self.transmit_chunk_progress_bar)
+        # self.transmit_chunk_progress_bar.hide()
 
         self.prepare_chunk_progress_bar = QProgressBar(chunk_groupBox)
         self.prepare_chunk_progress_bar.setObjectName("PrepareProgressBar")
-        self.prepare_chunk_progress_bar.hide()
+        # self.prepare_chunk_progress_bar.hide()
 
-        horizontal.addWidget(self.prepare_chunk_progress_bar)
+        chunk_progress_layout.addWidget(self.prepare_chunk_progress_bar)
+        chunk_progress_layout.addWidget(self.transmit_chunk_progress_bar)
 
         self.chunk_filename = QLabel(chunk_groupBox)
         self.chunk_filename.setObjectName("ChunkFilename")
         horizontal.addWidget(self.chunk_filename)
         self.chunk_filename.setText("Label goes here")
         self.chunk_filename.setFont(self.fixed_font)
-
+        # self.chunk_filename.setFont(QFontDatabase.systemFont(
+        # QFontDatabase.SystemFont.GeneralFont))
+        self.chunk_filename.setFont(QFont(".SF NS Mono"))
         self.chunk_box_table = self._create_chunk_table()
         horizontal.addWidget(self.chunk_box_table)
-        self.chunk_box_table.hide()
 
-        self.chunk_table_dialog = QDialog()
+        self.chunk_show_dialog_button = QPushButton("Push to Show Table", parent=self.centralwidget)
+        horizontal.addWidget(self.chunk_show_dialog_button)
+        self.chunk_show_dialog_button.hide()
+
+        self.chunk_table_dialog = QDialog(parent=self.centralwidget)
         self.chunk_table_dialog.setWindowModality(Qt.WindowModality.NonModal)
-        self.chunk_table_dialog.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.chunk_table_dialog.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
 
         self.chunk_dialog_table = self._create_chunk_table()
 
@@ -372,17 +386,18 @@ class Ui_MainWindow(object):
         return chunk_groupBox
 
     def _create_chunk_table(self):
-        chunk_table = QTableWidget(self.centralwidget)
+        chunk_table = QTableView(self.centralwidget)
         chunk_table.setObjectName("ChunkTable")
 
-        chunk_table.horizontalHeader().setMaximumSectionSize(6)
+        chunk_table.horizontalHeader().setMaximumSectionSize(2)
         chunk_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Fixed
         )
         chunk_table.horizontalHeader().setVisible(False)
-
-        chunk_table.verticalHeader().setMaximumSectionSize(6)
+        chunk_table.verticalHeader().setMaximumSectionSize(2)
         chunk_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        chunk_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+
         chunk_table.verticalHeader().setVisible(False)
         chunk_table.setShowGrid(False)
 

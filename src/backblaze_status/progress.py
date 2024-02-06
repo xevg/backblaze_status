@@ -2,6 +2,9 @@ from datetime import datetime, timedelta
 
 from .utils import file_size_string
 from .configuration import Configuration
+import threading
+import time
+from .locks import lock, Lock
 
 gb_divisor = Configuration.gb_divisor
 tb_divisor = Configuration.tb_divisor
@@ -15,6 +18,8 @@ class ProgressBox:
 
         self._total_size: int = 0
         self._total_size_completed: int = 0
+        self._total_size_transmitted: int = 0
+
         self._total_files: int = 0
         self._total_files_completed: float = 0.0
 
@@ -31,42 +36,69 @@ class ProgressBox:
             "Estimated Completion Time: Calculating ..."
         )
 
-        self._start_time = datetime.now()
-
         self._progress_string = "No progress yet"
 
         self._rate = 0
 
         self._files_percentage = 0
         self._size_percentage = 0
+        self.last_calculated: datetime = datetime.now()
 
+        timer_thread = threading.Thread(
+            target=self.timer, name="ProgressUpdateTimer", daemon=True
+        )
+        timer_thread.start()
+
+    def timer(self) -> None:
+        while True:
+            time.sleep(15)
+            if (datetime.now() - self.last_calculated).total_seconds() > 15:
+                self.calculate()
+
+    @lock(Lock.DB_LOCK)
     def calculate(self):
-        to_do = self._backup_status.to_do
+        from .to_do_files import ToDoFiles
+
+        self.last_calculated = datetime.now()
+        to_do: ToDoFiles = self._backup_status.to_do
         if to_do is None:
             return
+
+        current_file = to_do.current_file
+        if current_file is None:
+            return
+
         self._total_size = to_do.total_size
         self._total_size_completed = to_do.completed_size
+        self._total_size_transmitted = to_do.transmitted_size
         self._total_files = to_do.total_files
         self._total_files_completed = to_do.completed_files
+
+        # to_do.completed_size returns all the completed items, this adds the
+        # currently processing file as well
+        if current_file.large_file:
+            self._total_size_completed += current_file.total_chunk_size
+            self._total_size_transmitted += current_file.transmitted_chunk_size
 
         now = datetime.now()
         # Files Percentage
         if to_do.total_files == 0:
             self._files_percentage = 0
         else:
-            self._files_percentage = to_do.completed_files / to_do.total_files
+            self._files_percentage = self.total_files_completed / self._total_files
 
-        if to_do.total_size == 0:
+        if self._total_size == 0:
             self._size_percentage = 0
         else:
-            self._size_percentage = to_do.completed_size / to_do.total_size
+            self._size_percentage = self._total_size_completed / self._total_size
 
         # Calculate the total rate
-        seconds_difference = (datetime.now() - self._start_time).seconds
+        seconds_difference = (datetime.now() - self._start_time).total_seconds()
         if seconds_difference == 0:
             self._rate = 0
         else:
-            self._rate = to_do.completed_size / seconds_difference
+            # Use transmitted size, because otherwise dedups can skew the rate
+            self._rate = self._total_size_transmitted / seconds_difference
 
         # Calculate time remaining
 
@@ -76,7 +108,8 @@ class ProgressBox:
                 "Estimated Completion Time: Calculating ..."
             )
         else:
-            self._remaining_size = to_do.total_size - to_do.completed_size
+            self._remaining_size = to_do.remaining_size
+            # Was: total_size - to_do.completed_size
             self._time_remaining = self._remaining_size / self._rate
             try:
                 self._estimated_completion_time = (
@@ -111,7 +144,10 @@ class ProgressBox:
 
     @property
     def total_processed(self) -> int:
-        return self.qt.backup_status.to_do.completed_size - self._start_size_completed
+        return (
+            self._backup_status.to_do.current_file.completed_size
+            - self._start_size_completed
+        )
 
     @property
     def total_size_gb(self) -> float:
@@ -152,14 +188,20 @@ class ProgressBox:
 
     @property
     def completion_time(self) -> str:
-        return f'Estimated Completion Time:  <span style="color:cyan"> {self._estimated_completion_time} </span>'
+        return (
+            f'Estimated Completion Time:  <span style="color:cyan">'
+            f" {self._estimated_completion_time} </span>"
+        )
 
     @property
     def rate(self) -> str:
         if self._rate == 0:
             return 'Rate: <span style="color:cyan">  Calculating ... </span>'
         else:
-            return f'Rate:  <span style="color:cyan"> {file_size_string(self._rate)}</span> / second'
+            return (
+                f'Rate:  <span style="color:cyan">'
+                f" {file_size_string(self._rate)}</span> / second"
+            )
 
     @property
     def estimated_completion_time(self) -> str:

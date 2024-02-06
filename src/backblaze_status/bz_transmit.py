@@ -3,13 +3,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 import logging
+import time
 
 from .backup_file import BackupFile
 from .bz_log_file_watcher import BzLogFileWatcher
 from .main_backup_status import BackupStatus
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
-from .utils import MultiLogger, get_lock, return_lock
+from .utils import MultiLogger
 
 
 @dataclass
@@ -21,7 +22,7 @@ class BzTransmit(BzLogFileWatcher):
 
     backup_status: BackupStatus
     qt: QTBackupStatus | None = field(default=None)
-    backup_list: ToDoFiles | None = field(default=None, init=False)
+    to_do: ToDoFiles | None = field(default=None, init=False)
 
     _total_lines: int = field(default=0, init=False)
     _dedups: int = field(default=0, init=False)
@@ -53,9 +54,15 @@ class BzTransmit(BzLogFileWatcher):
         # Compile the search for new to_do file
         self.new_to_do_file_re = re.compile("Leaving MakeBzDoneFileToDataCenter")
 
+        # Compile duplicate chunk
+        self.duplicate_encrypted = re.compile(
+            "noCopy code path VERY SUCCESSFUL,.*largeFileName=([^,]*).*_seq([^\.]*)"
+        )
+
     def _get_latest_logfile_name(self) -> Path:
         """
-        Scan the log directory for any files that end in .log, and return the one with the newest modification time
+        Scan the log directory for any files that end in .log, and return the one
+        with the newest modification time
 
         :return:
         """
@@ -101,19 +108,13 @@ class BzTransmit(BzLogFileWatcher):
             chunk = True
             _filename = Path(_line.split(": ")[-1].rstrip())
 
-            if not self.backup_list.exists(_filename):
-                self.backup_list.add_file(
-                    Path(_filename),
+            if not self.to_do.exists(str(_filename)):
+                self.to_do.add_file(
+                    _filename,
                     is_chunk=chunk,
                     timestamp=_datetime,
                 )
-            lock_start = get_lock(
-                self.backup_list.lock, "backup_list", "bz_transmit:134"
-            )
-            self.backup_list.current_file = self.backup_list.file_dict[str(_filename)]
-            return_lock(
-                self.backup_list.lock, "backup_list", "bz_transmit:136", lock_start
-            )
+            self.to_do.current_file = self.to_do.get_file(str(_filename))
             self.qt.signals.start_new_file.emit(str(_filename))
 
         _dedup_search_results = self.dedup_search_re.search(_line)
@@ -130,29 +131,83 @@ class BzTransmit(BzLogFileWatcher):
                     .astimezone(tz=None)
                 )
             else:
+                _timestamp = _line[0:14]
                 _datetime = (
                     datetime.strptime(_timestamp, "%Y%m%d%H%M%S")
                     .replace(tzinfo=timezone.utc)
                     .astimezone(tz=None)
                 )
 
-            if not self.backup_list.exists(str(_filename)):
-                self.backup_list.add_file(
+            if not self.to_do.exists(str(_filename)):
+                self.to_do.add_file(
                     Path(_filename),
                     is_chunk=chunk,
                     timestamp=_datetime,
                 )  # add_file locks the backup list itself
 
-            file_info = self.backup_list.file_dict[str(_filename)]  # type: BackupFile
-            lock_start = get_lock(file_info.lock, "file_info", "bz_transmit:167")
-            file_info.dedup_count += 1
-            file_info.chunks_deduped.add(chunk_number)
-            file_info.chunk_current = chunk_number
-            file_info.rate = "bztransmit"
-            return_lock(file_info.lock, "file_info", "bz_transmit:172", lock_start)
+            backup_file = self.to_do.get_file(str(_filename))  # type: BackupFile
+            backup_file.add_deduped(chunk_number)
+            backup_file.current_chunk = chunk_number
+            backup_file.rate = "bztransmit"
+
+        _dedup_encrypted_search_results = self.duplicate_encrypted.search(_line)
+        if _dedup_encrypted_search_results is not None:
+            chunk = True
+            chunk_number = int(_dedup_encrypted_search_results.group(2), base=16)
+            _filename = Path(_dedup_encrypted_search_results.group(1))
+            _timestamp = _line[0:19]
+            if _timestamp[4] == "-":
+                # The transmit file uses UTC time
+                _datetime = (
+                    datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone(tz=None)
+                )
+            else:
+                _timestamp = _line[0:14]
+                _datetime = (
+                    datetime.strptime(_timestamp, "%Y%m%d%H%M%S")
+                    .replace(tzinfo=timezone.utc)
+                    .astimezone(tz=None)
+                )
+
+            if not self.to_do.exists(str(_filename)):
+                self.to_do.add_file(
+                    Path(_filename),
+                    is_chunk=chunk,
+                    timestamp=_datetime,
+                )  # add_file locks the backup list itself
+
+            backup_file = self.to_do.get_file(str(_filename))  # type: BackupFile
+            backup_file.add_deduped(chunk_number)
+            backup_file.current_chunk = chunk_number
+            backup_file.rate = "bztransmit"
 
         _new_to_do_file_search_results = self.new_to_do_file_re.search(_line)
         if _new_to_do_file_search_results is not None:
             # TODO: We need to re-read the to_do file
             self._multi_log.log(f"There is a new ToDo file. Reread it ({_timestamp})")
             pass
+
+    def read_file(self) -> None:
+        while True:
+            if not self.to_do:
+                # Give the main program time to start up and scan the disks
+                time.sleep(10)
+                self.to_do = self.backup_status.to_do
+            else:
+                break
+
+        _log_file = self._get_latest_logfile_name()
+        self._current_filename = _log_file
+        while True:
+            with _log_file.open("r") as _log_fd:
+                self._multi_log.log(f"Reading file {_log_file}")
+                if self._first_pass:
+                    _log_fd.seek(0, 2)
+                for _line in self._tail_file(_log_fd):
+                    self._process_line(_line)
+
+                self._first_pass = False
+                _log_file = self._get_latest_logfile_name()
+                self._current_filename = _log_file

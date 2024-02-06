@@ -10,10 +10,10 @@ from .bz_log_file_watcher import BzLogFileWatcher
 from .main_backup_status import BackupStatus
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
-from .utils import MultiLogger, get_lock, return_lock
+from .utils import MultiLogger
 from .configuration import Configuration
-
-
+from .dev_debug import DevDebug
+from rich.pretty import pprint
 @dataclass
 class BzLastFilesTransmitted(BzLogFileWatcher):
     """
@@ -30,6 +30,8 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
     _batch_count: int = field(default=0, init=False)
     _is_batch: bool = field(default=False, init=False)
     _current_filename: Path | None = field(default=None, init=False)
+    _previous_filename: str | None = field(default=None, init=False)
+    _current_large_filename: str | None = field(default=None)
     _first_pass: bool = field(default=True, init=False)
     _batch: BzBatch | None = field(default=None, init=False)
     _file_size: int = field(default=0, init=False)
@@ -46,6 +48,7 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         self._multi_log.log("Starting BzLastFilesTransmitted")
 
         self.go_to_end = True
+        self.debug = self.qt.debug
 
     def _get_latest_logfile_name(self) -> Path:
         """
@@ -83,47 +86,63 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         if not self._first_pass:
             self._multi_log.log(_line, level=logging.DEBUG)
 
-        # The format of the file are fixed length fields, separated by "-" characters
-        # Backblaze backs up files in one of three ways
-        # 1) The file is transmitted on its own
-        # 2) The file is large enough to need to be split up
-        # 3) The file is small enough to be transmitted in a batch with other files
+        self.debug.print("lastfilestransmitted.show_line", _line)
 
-        # For the first case, the typical line is 6 fields:
-        #  1) Timestamp
-        #  2) The tee-shirt size
-        #  3) They type of throttling
-        #  4) The rate the file was transmitted at. This field can also have "dedup", which means that it has
-        #       deduplicated this file or chunk, and not transmitted it over. That is very efficient.
-        #  5) The number of bytes in the file
-        #  6) The filename
+        """
+        The format of the file are fixed length fields, separated by "-" characters
+        Backblaze backs up files in one of three ways
+         1) The file is transmitted on its own
+         2) The file is large enough to need to be split up
+         3) The file is small enough to be transmitted in a batch with other files
 
-        # 2024-01-03 00:00:10 -  large  - throttle auto     11 - 19780 kBits/sec - 10485760 bytes
-        #     - /Volumes/CameraHDD4/SecuritySpy/Bedroom Foot/2023-11-06/2023-11-06 00 C Bedroom Foot.m4v
-        # (Above line is a single line, split for readability)
+        For the first case, the typical line is 6 fields:
+         1) Timestamp
+         2) The tee-shirt size
+         3) They type of throttling
+         4) The rate the file was transmitted at. This field can also have "dedup", 
+              which means that it has deduplicated this file or chunk, and not 
+              transmitted it over. That is very efficient.
+         5) The number of bytes in the file
+         6) The filename
 
-        # The second case is just like the first, but instead of just filename, it specifies which chunk of
-        # the file it is
+        2024-01-03 00:00:10 -  large  - throttle auto     11 - 19780 kBits/sec 
+            - 10485760 bytes - /Volumes/CameraHDD4/SecuritySpy/Bedroom 
+            Foot/2023-11-06/2023-11-06 00 C Bedroom Foot.m4v
+        (Above line is a single line, split for readability)
 
-        # 2024-01-03 00:00:10 -  large  - throttle auto     11 - 32091 kBits/sec - 10485760 bytes
-        #    - Chunk 00012 of /Volumes/CameraHDD4/SecuritySpy/Bedroom Foot/2023-11-06/2023-11-06 00 C Bedroom Foot.m4v
-        # (Above line is a single line, split for readability)
+        The second case is just like the first, but instead of just filename, 
+        it specifies which chunk of the file it is
 
-        # The third case batches multiple files together. The first line is similar to the first case, but it
-        #   says how many of the files were batched together
+        2024-01-03 00:00:10 -  large  - throttle auto     11 - 32091 kBits/sec 
+           - 10485760 bytes
+           - Chunk 00012 of /Volumes/CameraHDD4/SecuritySpy/Bedroom Foot/2023-11-06
+           /2023-11-06 00 C Bedroom Foot.m4v
+        (Above line is a single line, split for readability)
 
-        # 2024-01-01 19:42:53 -  large  - throttle auto     11 - 30985 kBits/sec -  6859241 bytes
-        #   - Multiple small files batched in one request, the 17 files are listed below:
-        # (Above line is a single line, split for readability)
+        The third case batches multiple files together. The first line is similar to 
+        the first case, but it says how many of the files were batched together
 
-        # The next lines in the file are the batched files, 17 of them in this example. It is only three fields,
-        # a timestampe, a blank field, and the name of the file
-        #  2024-01-01 19:42:53 -
-        #    - /Users/xev/Qt/QtDesignStudio/Qt Design Studio.app/Contents/Frameworks/libGLSL.4.3.2.dylib
-        # (Above line is a single line, split for readability)
+        2024-01-01 19:42:53 -  large  - throttle auto     11 - 30985 kBits/sec 
+          -  6859241 bytes
+          - Multiple small files batched in one request, the 17 files are listed below:
+        (Above line is a single line, split for readability)
+
+        The next lines in the file are the batched files, 17 of them in this example. 
+        It is only three fields, a timestamp, a blank field, and the name of the 
+        file 2024-01-01 19:42:53 - - /Users/xev/Qt/QtDesignStudio/Qt Design 
+        Studio.app/Contents/Frameworks/libGLSL.4.3.2.dylib (Above line is a single 
+        line, split for readability)
+        
+        
+        The flow is:
+          If the previous filename is None, set the previous filename to the current 
+          filename
+          
+        """
 
         _fields = _line.split(" - ")
-        # Sometimes filenames will have hyphens in them, and in that case treat it as a single filename
+        # Sometimes filenames will have hyphens in them, and in that case treat it as
+        # a single filename
         if len(_fields) > 6:
             new_field = _fields[:5]
             new_field.append(" - ".join(_fields[5:]))
@@ -147,10 +166,11 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
                         _filename = _filename[15:]
                         chunk = True
                         self._is_batch = False
+
                     # If it's a multiple file batch, create a new batch construct
                     #  I don't think that I'm actually using this for anything,
                     case "Multi":
-                        self._batch = BzBatch(_bytes, _timestamp)
+                        self._batch = BzBatch(size=_bytes, timestamp=_timestamp)
                         self._batch_count += 1
                         self._is_batch = True
                         # Since we don't do anything with the multi line, return now
@@ -159,7 +179,7 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
                 # This is a file within the batch
                 _timestamp, _, _filename = _fields
                 _bytes = 0
-                self._batch.add_file(Path(_filename))
+                self._batch.add_file(_filename)
             case _:
                 print(f"Unrecognized line: {_line}")
 
@@ -175,77 +195,70 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
 
         # If the file we are backing up is not on the to_do list, then we add it
         if not self.backup_list.exists(_filename):
+            print(f"Unexpected file {_filename} being backed up")
             self.backup_list.add_file(
                 Path(_filename),
                 is_chunk=chunk,
                 timestamp=_datetime,
             )  # No lock here because add_file locks
 
-        # If the file is transmitted, we mark it complete, as long as it's fully complete and not
-        #   waiting for more chunks
-        if not chunk:
-            self.backup_list.completed(_filename)
+        if self._previous_filename is None:
+            self._previous_filename = _filename
+
+            # We have started transmitting, so set the marker for that
+            self.qt.signals.transmitting.emit(_filename)
+
+        elif self._previous_filename != _filename:
+            # First complete the previous filename
+            # self.qt.signals.completed_file.emit(self._previous_filename)
+
+            # Now set the new filename tp the previous filename
+            self._previous_filename = _filename
+
+            # We have started transmitting, so set the marker for that
+            self.qt.signals.transmitting.emit(_filename)
 
         if _rate == "dedup":
             dedup = True
         else:
             dedup = False
 
-        # Get the file off of the to_list. I have to lock it so no other thread reads/writes from it while I do
-        file_info = self.backup_list.file_dict[str(_filename)]  # type: BackupFile
-        lock_start = get_lock(
-            file_info.lock,
-            f"BackupFile ({file_info.file_name})",
-            "lastfiletransmitted:165",
-        )
+        # Get the file off of the to_list. I have to lock it so no other thread
+        # reads/writes from it while I do
+        backup_file = self.backup_list.get_file(str(_filename))  # type: BackupFile
+        if backup_file is None:
+            return
+
         if _rate:
             _rate = _rate.strip()
             # Keep track of how many files and bytes were deduplicated
             if dedup:
                 if chunk:
-                    file_info.deduped_bytes += Configuration.default_chunk_size
-                    _bytes = Configuration.default_chunk_size
+                    backup_file.add_deduped(_chunk_number)
                 else:
                     file = Path(_filename[15:])
-                    file_info.deduped_bytes += file.stat().st_size
-                    _bytes = Configuration.default_chunk_size
+                    backup_file.deduped_bytes += file.stat().st_size
 
-                self._dedups += 1
-                file_info.dedup_count += 1
-                # file_info.deduped_bytes += _bytes
-                file_info.dedup_current = True
+                backup_file.is_deduped = True
             else:
-                file_info.transmitted_bytes += _bytes
-                file_info.dedup_current = False
+                if chunk:
+                    backup_file.add_transmitted(_chunk_number)
+                else:
+                    backup_file.transmitted_bytes += _bytes
+                    backup_file.is_deduped = False
 
             if _rate != "dedup" and _rate != "":
                 _rate = f"{int(_rate[:-10]):,}{_rate[-10:]}"
 
-            file_info.rate = _rate
-            file_info.total_bytes_processed += _bytes
-
-        # If it's a chunk, update the fields so that I can see which chunks have been deduplicated, and which
-        #  have been transmitted. This lets me know what percentage of the file (and which blocks) have been
-        #  transmitted
-
-        if chunk:
-            if _rate == "dedup":
-                file_info.chunks_deduped.add(_chunk_number)
-            else:
-                file_info.chunks_transmitted.add(_chunk_number)
-            file_info.chunk_current = _chunk_number
+            backup_file.rate = _rate
+            backup_file.total_bytes_processed += _bytes
 
         if self._batch:
-            file_info.batch = self._batch
+            backup_file.batch = self._batch
         self._bytes += _bytes
-        file_info.timestamp = _datetime
-        return_lock(
-            file_info.lock,
-            f"BackupFile ({file_info.file_name})",
-            "lastfiletransmitted:165",
-            lock_start,
-        )
+        backup_file.timestamp = _datetime
 
+        return
         # Send a notification to the display to let it output the data. Since there can be a *lot* of output,
         #  especially if I'm catching up on the file, I throw a little delay in so that I don't overwhelm
         #  the GUI event loop
@@ -278,11 +291,16 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
             else:
                 with _log_file.open("r") as _log_fd:
                     self._multi_log.log(f"Reading file {_log_file}")
+                    if self._first_pass:
+                        _log_fd.seek(0, 2)
+
                     for _line in self._tail_file(_log_fd):
                         tell = _log_fd.tell()
                         self._process_line(_line, tell)
 
-                    self.first_pass = False
+                    self._first_pass = False
+                    self._multi_log.log("Finished first pass", module=self._module_name)
+
                     _log_file = self._get_latest_logfile_name()
                     self._current_filename = _log_file
 
@@ -291,9 +309,6 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
             _line = _file.readline()
 
             if not _line:
-                if self._first_pass:
-                    self._multi_log.log("Finished first pass", module=self._module_name)
-                self._first_pass = False
                 time.sleep(1)
                 _new_filename = self._get_latest_logfile_name()
                 if _new_filename != self._current_filename:
