@@ -1,3 +1,4 @@
+from __future__ import annotations
 import threading
 from datetime import datetime
 from enum import IntEnum
@@ -21,6 +22,13 @@ class ColumnNames(IntEnum):
 
 
 class BzDataTableModel(QAbstractTableModel):
+    """
+
+    There are two data tables used for the display, the first one is the BackupResult
+    list of what has been backed up, and the second is the ToDoFile list of what
+    will be backed up
+    """
+
     ToDoDisplayCount: int = 52
 
     def __init__(self, qt):
@@ -271,7 +279,8 @@ class BzDataTableModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
     def add_row(self, row: BackupResults, chunk=False):
-        current_item: BackupFile = self.to_do.get_file(row.file_name)
+        # If there was a previous item processing, set its end time to now,
+        # since that is the only way that we know that the previous one was done
         if len(self.data_list) > 0:
             self.data_list[-1].end_time = datetime.now()
         self.data_list.append(row)
@@ -316,7 +325,7 @@ class BzDataTableModel(QAbstractTableModel):
         self.to_do_cache = to_do_cache
 
     def get_to_do_start_index(self) -> int:
-        to_do: ToDoFiles = self.qt.backup_status.to_do
+        to_do: "ToDoFiles" = self.qt.backup_status.to_do
         if len(self.data_list) == 0 and not self.showing_new_file:
             return 0
         else:
