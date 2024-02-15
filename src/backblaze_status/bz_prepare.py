@@ -114,7 +114,7 @@ class BzPrepare(BzLogFileWatcher):
                 # TODO: Do soemthing to determine that the current file is not the previous file, and if it
                 #  is, then wait for it to be the current?
                 with _log_file.open("r") as _log_fd:
-                    self._multi_log.log(f"Reading file {_log_file}")
+                    # self._multi_log.debug(f"Reading file {_log_file}")
                     for _line in self._tail_file(_log_fd):
                         tell = _log_fd.tell()
                         self._process_line(_line, tell)
