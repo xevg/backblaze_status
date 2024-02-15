@@ -5,6 +5,8 @@ from _datetime import datetime
 from .dev_debug import DevDebug
 from .locks import Lock
 from .configuration import Configuration
+from PyQt6.QtGui import QColor
+from typing import Optional
 
 
 @dataclass
@@ -20,6 +22,7 @@ class BackupFile:
     timestamp: datetime = field(default=datetime.now())
     completed: bool = False
     is_deduped: bool = False
+    previous_run: bool = False
     _deduped_bytes: int = 0
     _transmitted_bytes: int = 0
     _total_bytes_processed: int = 0
@@ -32,9 +35,21 @@ class BackupFile:
     batch: BzBatch = None
     _rate: str = str()
 
+    start_time: datetime = 0
+    end_time: datetime = 0
+
+    row_color: Optional[QColor] = field(default=None)
+    timestamp_color: Optional[QColor] = field(default=None)
+    file_name_color: Optional[QColor] = field(default=None)
+    file_size_color: Optional[QColor] = field(default=None)
+    start_time_color: Optional[QColor] = field(default=None)
+    rate_color: Optional[QColor] = field(default=None)
+
     def __post_init__(self):
         self.debug = DevDebug()
         self.debug.disable("lock")
+        if self.row_color is None:
+            self.row_color = QColor("White")
 
     def __hash__(self):
         return hash(repr(self))
