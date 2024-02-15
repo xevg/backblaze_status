@@ -14,6 +14,8 @@ from .utils import MultiLogger
 from .configuration import Configuration
 from .dev_debug import DevDebug
 from rich.pretty import pprint
+
+
 @dataclass
 class BzLastFilesTransmitted(BzLogFileWatcher):
     """
@@ -201,6 +203,8 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
                 is_chunk=chunk,
                 timestamp=_datetime,
             )  # No lock here because add_file locks
+
+            self.backup_list.current_file = self.backup_list.get_file(_filename)
 
         if self._previous_filename is None:
             self._previous_filename = _filename
