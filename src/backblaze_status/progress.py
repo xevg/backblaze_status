@@ -71,8 +71,8 @@ class ProgressBox:
         self._total_size = to_do.total_size
         self._total_size_completed = to_do.completed_size
         self._total_size_transmitted = to_do.transmitted_size
-        self._total_files = to_do.total_files
-        self._total_files_completed = to_do.completed_files
+        self._total_files = to_do.total_file_count
+        self._total_files_completed = to_do.completed_file_count
 
         # to_do.completed_size returns all the completed items, this adds the
         # currently processing file as well
@@ -82,7 +82,7 @@ class ProgressBox:
 
         now = datetime.now()
         # Files Percentage
-        if to_do.total_files == 0:
+        if to_do.total_file_count == 0:
             self._files_percentage = 0
         else:
             self._files_percentage = self.total_files_completed / self._total_files
