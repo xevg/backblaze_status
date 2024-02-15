@@ -13,22 +13,11 @@ __version__ = version("backblaze_status")
 rich.traceback.install(show_locals=False)
 
 
-def test_app():
+def run():
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon("backblaze_status.png"))
     app.setApplicationName("Backblaze Status")
-    #     qdarktheme.setup_theme()
 
-    QTBackupStatus(gui_test=False)
+    QTBackupStatus()
     app.exec()
     sys.exit()
-
-
-def run():
-    test_app()
-
-
-if __name__ == "__main__":
-    run()
-
-# run()
