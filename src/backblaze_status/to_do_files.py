@@ -2,15 +2,19 @@ import os
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime
+
+from PyQt6.QtGui import QColor
 
 from .backup_file import BackupFile
-from .utils import file_size_string, MultiLogger, get_lock, return_lock
+from .completed_files import CompletedFiles
 from .configuration import Configuration
 from .dev_debug import DevDebug
-from .locks import lock, Lock
+from .exceptions import CompletedFileNotFound
+from .locks import Lock
+from .utils import MultiLogger
 
 
 class NotFound(Exception):
@@ -27,8 +31,8 @@ class ToDoFiles:
     _todo_file_name: str = field(default_factory=str, init=False)
     _file_list: List[BackupFile] = field(default_factory=list, init=False)
     _file_dict: dict[str, BackupFile] = field(default_factory=dict, init=False)
-    # _total_size: int = field(default=0, init=False)
-    # _total_files: int = field(default=0, init=False)
+    _completed_files: CompletedFiles = field(default_factory=CompletedFiles, init=False)
+
     _file_modification_time: float = field(default=0.0, init=False)
     _backup_running: bool = field(default=False, init=False)
     _current_file: BackupFile = field(default=None, init=False)
@@ -106,7 +110,7 @@ class ToDoFiles:
                 self._backup_running = False
                 self._file_list.clear()
                 self._file_dict.clear()
-                self._todo_file_name, _ = self.get_to_do_file()
+                self._todo_file_name = self.get_to_do_file()
                 file = Path(self._todo_file_name)
                 stat = file.stat()
 
@@ -175,18 +179,31 @@ class ToDoFiles:
         :param filename:
         :return:
         """
-        todo_file: BackupFile = self.get_file(filename)
-        if todo_file is None:
-            return
+        completed_file: BackupFile = self.get_file(filename)
+        if completed_file is None:
+            raise CompletedFileNotFound
 
-        if todo_file.completed:
-            return
-
-        # invalidate the cache
-        self.cache = dict()
+        # invalidate the parts of the cache we care about
+        for key in [
+            "remaining_files",
+            "remaining_size",
+            "completed_file_count",
+            "completed_size",
+        ]:
+            try:
+                del self.cache[key]
+            except KeyError:
+                pass
 
         with Lock.DB_LOCK:
-            todo_file.completed = True
+            completed_file.completed = True
+            completed_file.end_time = datetime.now()
+            self.completed_files.append(completed_file)
+
+            # Define the color based on whether it is deduped or not
+            # TODO: Should this color selection move to the model?
+            if completed_file.is_deduped:
+                completed_file.row_color = QColor("orange")
 
         if self.qt is not None:
             self.qt.result_data.layoutChanged.emit()
@@ -227,7 +244,9 @@ class ToDoFiles:
                 self._file_list.append(backup_file)
                 self._file_dict[str(filename)] = backup_file
 
-    def get_remaining(self, start_index: int = 0, number_of_rows: int = 0) -> list:
+    def get_remaining_files(
+        self, start_index: int = 0, number_of_rows: int = 0
+    ) -> list:
         start_index += 1
         count_of_rows = 0
         with Lock.DB_LOCK:
@@ -240,6 +259,31 @@ class ToDoFiles:
                     result_list.append(item)
 
             return result_list
+
+    @property
+    def previous_files(self) -> list:
+        result = [
+            backup_file for backup_file in self._file_list if backup_file.previous_run
+        ]
+        return result
+
+    @property
+    def completed_files(self) -> list:
+        result = [
+            backup_file
+            for backup_file in self._file_list
+            if backup_file.completed and backup_file.previous_run
+        ]
+        return result
+
+    @property
+    def remaining_files(self) -> list:
+        result = [
+            backup_file
+            for backup_file in self._file_list
+            if not backup_file.completed and not backup_file.previous_run
+        ]
+        return result
 
     def todo_files(self, count=1000000000, filename: str = None):
         """
@@ -308,7 +352,7 @@ class ToDoFiles:
             size = sum(
                 backup_file.file_size
                 for backup_file in self._file_list
-                if backup_file.completed
+                if backup_file.completed and not backup_file.previous_run
             )
 
             if _deduped_size:
@@ -316,6 +360,8 @@ class ToDoFiles:
                     len(backup_file.chunks_deduped) * Configuration.default_chunk_size
                     for backup_file in self._file_list
                     if backup_file.large_file
+                    and backup_file.completed
+                    and not backup_file.previous_run
                 )
 
             if _transmitted_size:
@@ -324,6 +370,8 @@ class ToDoFiles:
                     * Configuration.default_chunk_size
                     for backup_file in self._file_list
                     if backup_file.large_file
+                    and backup_file.completed
+                    and not backup_file.previous_run
                 )
 
             return size
@@ -359,15 +407,19 @@ class ToDoFiles:
         return size
 
     @property
-    def completed_files(self) -> int:
-        cached = self.cache.get("completed_files")
+    def completed_file_count(self) -> int:
+        cached = self.cache.get("completed_file_count")
         if cached:
             return cached
 
         with Lock.DB_LOCK:
-            files = sum(1 for backup_file in self._file_list if backup_file.completed)
+            files = sum(
+                1
+                for backup_file in self._file_list
+                if backup_file.completed and not backup_file.previous_run
+            )
 
-        self.cache["completed_files"] = files
+        self.cache["completed_file_count"] = files
         return files
 
     @property
@@ -377,30 +429,25 @@ class ToDoFiles:
             return cached
 
         with Lock.DB_LOCK:
-            size = sum(backup_file.file_size for backup_file in self._file_list)
+            size = sum(
+                backup_file.file_size
+                for backup_file in self._file_list
+                if not backup_file.previous_run
+            )
 
         self.cache["total_size"] = size
         return size
 
     @property
-    def total_files(self) -> int:
+    def total_file_count(self) -> int:
         with Lock.DB_LOCK:
-            return len(self._file_list)
+            return sum(
+                1 for backup_file in self._file_list if not backup_file.previous_run
+            )
 
     @property
-    def duplicate_files(self) -> int:
-        cached = self.cache.get("duplicate_files")
-        if cached:
-            return cached
-
-        with Lock.DB_LOCK:
-            files = sum(1 for backup_file in self._file_list if backup_file.is_deduped)
-            self.cache["duplicate_files"] = files
-            return files
-
-    @property
-    def transmitted_files(self) -> int:
-        cached = self.cache.get("transmitted_files")
+    def duplicate_file_count(self) -> int:
+        cached = self.cache.get("duplicate_file_count")
         if cached:
             return cached
 
@@ -408,7 +455,24 @@ class ToDoFiles:
             files = sum(
                 1
                 for backup_file in self._file_list
-                if not backup_file.is_deduped and backup_file.completed
+                if backup_file.is_deduped and not backup_file.previous_run
             )
-            self.cache["transmitted_files"] = files
+            self.cache["duplicate_file_count"] = files
+            return files
+
+    @property
+    def transmitted_file_count(self) -> int:
+        cached = self.cache.get("transmitted_file_count")
+        if cached:
+            return cached
+
+        with Lock.DB_LOCK:
+            files = sum(
+                1
+                for backup_file in self._file_list
+                if not backup_file.is_deduped
+                and backup_file.completed
+                and not backup_file.previous_run
+            )
+            self.cache["transmitted_file_count"] = files
             return files
