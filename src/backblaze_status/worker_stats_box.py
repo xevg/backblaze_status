@@ -29,17 +29,17 @@ class StatsBoxWorker(QObject):
                 to_do = self.backup_status.to_do
                 continue
 
-            total_files = f"Total Files: {to_do.total_files:,d} / {file_size_string(to_do.total_size)}"
+            total_files = f"Total Files: {to_do.total_file_count:,d} / {file_size_string(to_do.total_size)}"
             transmitted_files = (
-                f"Transmitted: {to_do.transmitted_files:,}"
+                f"Transmitted: {to_do.transmitted_file_count:,}"
                 f" / {file_size_string(to_do.transmitted_size)}"
             )
 
-            combined_files = to_do.duplicate_files + to_do.transmitted_files
+            combined_files = to_do.duplicate_file_count + to_do.transmitted_file_count
             if combined_files == 0:
                 percentage_file_duplicate = 0
             else:
-                percentage_file_duplicate = to_do.duplicate_files / combined_files
+                percentage_file_duplicate = to_do.duplicate_file_count / combined_files
 
             combined_size = to_do.duplicate_size + to_do.transmitted_size
             if combined_size == 0:
@@ -48,7 +48,7 @@ class StatsBoxWorker(QObject):
                 percentage_size_duplicate = to_do.duplicate_size / combined_size
 
             file_duplicate_files = (
-                f"Duplicates: {to_do.duplicate_files}"
+                f"Duplicates: {to_do.duplicate_file_count}"
                 f" / {file_size_string(to_do.duplicate_size)} "
             )
 
