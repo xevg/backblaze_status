@@ -7,6 +7,7 @@ from PyQt6.QtGui import QColor
 from enum import IntEnum
 
 from .backup_file import BackupFile
+from .to_do_files import ToDoFiles
 from rich.pretty import pprint
 
 
@@ -52,7 +53,7 @@ class ChunkModel(QAbstractTableModel):
         return self._file_name
 
     @filename.setter
-    def filename(self, value):
+    def filename(self, value: str):
         self._file_name = value
         self.reset_table()
         self.layoutChanged.emit()
