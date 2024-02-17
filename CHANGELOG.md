@@ -2,7 +2,14 @@
 
 
 
-## v0.1.2 (2024-02-16)
+## v0.1.3 (2024-02-16)
+
+### Fix
+
+* fix: add sphinx ([`b4298f2`](https://github.com/xevg/backblaze_status/commit/b4298f2c02c800eb51a493d1d2adf09f52f35fe9))
+
+
+## v0.1.2 (2024-02-17)
 
 ### Fix
 
