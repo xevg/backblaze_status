@@ -10,7 +10,7 @@ $ pip install backblaze_status
 
 ## Usage
 
-- TODO sigh
+- TODO
 
 ## Contributing
 
