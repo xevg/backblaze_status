@@ -2,7 +2,14 @@
 
 
 
-## v0.1.4 (2024-02-16)
+## v0.2.0 (2024-02-16)
+
+### Feature
+
+* feat: fix version number ([`178699a`](https://github.com/xevg/backblaze_status/commit/178699acd40d565c766a993dd276154d58d11c0f))
+
+
+## v0.1.4 (2024-02-17)
 
 ### Fix
 
