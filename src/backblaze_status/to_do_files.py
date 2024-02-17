@@ -419,6 +419,20 @@ class ToDoFiles:
         if cached:
             return cached
 
+        if self._to_do_file_list is not None and self.current_file is not None:
+            current_index = self._to_do_file_list.index(
+                str(self.current_file.file_name)
+            )
+            size = sum(
+                [
+                    backup_file.file_size
+                    for backup_file in self._to_do_file_list.file_list[
+                        : current_index - 1
+                    ]
+                ]
+            )
+            return size
+
         size = sum(
             backup_file.file_size
             for backup_file in self._completed_file_list.file_list
