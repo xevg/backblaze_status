@@ -26,7 +26,7 @@ class BackupFile:
     _deduped_bytes: int = 0
     _transmitted_bytes: int = 0
     _total_bytes_processed: int = 0
-    large_file = False
+    large_file: bool = False
     _chunks_total: int = 0
     chunks_prepared: set = field(default_factory=set)
     chunks_deduped: set = field(default_factory=set)

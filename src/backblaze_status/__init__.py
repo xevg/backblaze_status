@@ -6,6 +6,8 @@ from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
 
 from .qt_backup_status import QTBackupStatus
+from .bz_batch import BzBatch
+from .backup_file import BackupFile
 
 # read version from installed package
 __version__ = version("backblaze_status")
