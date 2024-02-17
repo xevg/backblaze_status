@@ -56,6 +56,13 @@ class BackupFileList:
         else:
             raise TypeError("Invalid argument type")
 
+    def index(self, file: str) -> int:
+        backup_file = self._file_dict.get(file)
+        if backup_file is None:
+            raise ValueError(f"'{file}' is not in list")
+        backup_index = self._file_list.index(backup_file)
+        return backup_index
+
     def exists(self, item: str) -> bool:
         return item in self._file_dict.keys()
 
