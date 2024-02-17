@@ -2,7 +2,16 @@
 
 
 
-## v0.3.0 (2024-02-16)
+## v0.3.1 (2024-02-17)
+
+### Fix
+
+* fix: update semantic-release ([`624b121`](https://github.com/xevg/backblaze_status/commit/624b1218cf1edff14c6582df835f55674600f41b))
+
+* fix: silly change ([`1e48cbd`](https://github.com/xevg/backblaze_status/commit/1e48cbda09b93b122244518ce9a9c51938f475e0))
+
+
+## v0.3.0 (2024-02-17)
 
 ### Feature
 
