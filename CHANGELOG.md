@@ -2,6 +2,13 @@
 
 
 
+## v0.7.0 (2024-02-17)
+
+### Feature
+
+* feat: trying new version with extra sauce ([`8d4e776`](https://github.com/xevg/backblaze_status/commit/8d4e7766705ac75ad5009be5583e48de43aea68f))
+
+
 ## v0.6.0 (2024-02-17)
 
 ### Feature
