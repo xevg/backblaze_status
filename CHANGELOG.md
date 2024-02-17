@@ -2,6 +2,15 @@
 
 
 
+## v0.4.0 (2024-02-17)
+
+### Feature
+
+* feat: another silly change ([`eede703`](https://github.com/xevg/backblaze_status/commit/eede703f2d0225e7ed420d8f73d0f4e1d3b0d4ff))
+
+* feat: try again ([`366adeb`](https://github.com/xevg/backblaze_status/commit/366adeb47d0c30f424d59b7d0a5b171574c8afc0))
+
+
 ## v0.3.1 (2024-02-17)
 
 ### Fix
