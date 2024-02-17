@@ -2,7 +2,14 @@
 
 
 
-## v0.1.0 (2024-02-16)
+## v0.1.1 (2024-02-16)
+
+### Fix
+
+* fix: silly change ([`bc7fa95`](https://github.com/xevg/backblaze_status/commit/bc7fa95d28caf8adf84e3ffe8ef5691cb41fd008))
+
+
+## v0.1.0 (2024-02-17)
 
 ### Feature
 
