@@ -5,6 +5,7 @@ from .configuration import Configuration
 import threading
 import time
 from .locks import lock, Lock
+from .to_do_files import ToDoFiles
 
 gb_divisor = Configuration.gb_divisor
 tb_divisor = Configuration.tb_divisor
@@ -57,8 +58,6 @@ class ProgressBox:
 
     @lock(Lock.DB_LOCK)
     def calculate(self):
-        from .to_do_files import ToDoFiles
-
         self.last_calculated = datetime.now()
         to_do: ToDoFiles = self._backup_status.to_do
         if to_do is None:
