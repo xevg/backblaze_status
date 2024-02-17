@@ -32,7 +32,7 @@ from .qt_mainwindow import Ui_MainWindow
 from .qt_signals import Signals
 from .to_do_dialog import ToDoDialog
 from .to_do_files import ToDoFiles
-from .utils import MultiLogger
+from .utils import MultiLogger, file_size_string
 from .workers import ProgressBoxWorker, BackupStatusWorker, StatsBoxWorker
 from .exceptions import CurrentFileNotSet, PreviousFileNotSet
 
@@ -102,8 +102,6 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         # Placeholder for the ToDoDialog
         self.to_do_dialog: ToDoDialog | None = None
 
-        self.setWindowTitle("Backblaze Status")
-
         # **** Set up threads ****
 
         # Clock thread
@@ -163,6 +161,10 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.chunk_box_table.setModel(self.chunk_model)
         self.chunk_dialog_table.setModel(self.chunk_model)
 
+        # Update the windows title
+        self.signals.backup_running.connect(self.set_window_title)
+        self.signals.backup_running.emit(False)
+
         # Set up key shortcuts
 
         self.b_key = QShortcut(Qt.Key.Key_B, self.data_model_table)
@@ -202,6 +204,13 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             self.scroll_bar_moved
         )
         self.progressBar.valueChanged.connect(self.update_progress_bar_percentage)
+
+    @pyqtSlot(bool)
+    def set_window_title(self, running: bool) -> None:
+        if running:
+            self.setWindowTitle("Backblaze Status")
+        else:
+            self.setWindowTitle("Backblaze Status  *** Backups not running ***")
 
     @pyqtSlot()
     def show_chunk_dialog(self):
@@ -309,6 +318,10 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         """
         if values.get("completed_size") is None:
             return
+        max_value = 2147483647
+        if values["completed_size"] > max_value or values["total_size"] > max_value:
+            values["completed_size"] = int(values["completed_size"] / 1024)
+            values["total_size"] = int(values["total_size"] / 1024)
 
         self.progressBar.setValue(values["completed_size"])
         self.progressBar.setMaximum(values["total_size"])
@@ -361,6 +374,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.chunk_box.show()
         self.reposition_table()  # Since the bottom moved
         self.file_info.hide()
+        self.signals.files_updated.emit()
 
     @pyqtSlot(str)
     def set_transmitting(self, filename: str):
@@ -404,6 +418,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             self.chunk_box.hide()
             self.chunk_table_dialog.hide()
             self.file_info.show()
+        self.signals.files_updated.emit()
 
     @pyqtSlot()
     def initialize_chunk_table(self):
@@ -538,7 +553,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             previous_file: BackupFile = to_do.get_file(self.previous_file_name)
             if previous_file is not None:
                 # Mark it complete on the ToDoList
-                to_do.completed(self.previous_file_name)
+                to_do.mark_completed(self.previous_file_name)
 
                 # Create a completed row record for the GUI
                 row_result = BackupResults(
@@ -555,6 +570,9 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
 
         to_do: ToDoFiles = self.backup_status.to_do
         new_file: BackupFile = to_do.get_file(file_name)
+        if new_file is None:
+            return
+
         new_file.start_time = datetime.now()
 
         # Set this file to the current file I am working on
