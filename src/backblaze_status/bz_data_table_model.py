@@ -72,6 +72,7 @@ class BzDataTableModel(QAbstractTableModel):
         self.to_do: ToDoFiles = self.qt.backup_status.to_do
         if self.to_do is None:
             self.qt.signals.to_do_available.connect(self.to_do_loaded)
+            self.qt.signals.backup_running.connect(self.backup_state_changed)
             self.completed_files_list: Optional[BackupFileList] = None
             self.to_do_files_list: Optional[BackupFileList] = None
         else:
@@ -106,6 +107,11 @@ class BzDataTableModel(QAbstractTableModel):
         self.to_do_files_list: BackupFileList = self.to_do.completed_file_list
         self.update_to_do_cache()
         self.layoutChanged.emit()
+
+    @pyqtSlot(bool)
+    def backup_state_changed(self, state: bool):
+        if not state:
+            self.showing_new_file = False
 
     def rowCount(self, index: QModelIndex) -> int:
         return len(self.display_cache)
