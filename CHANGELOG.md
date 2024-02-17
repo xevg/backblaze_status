@@ -2,7 +2,18 @@
 
 
 
-## v0.1.3 (2024-02-16)
+## v0.1.4 (2024-02-16)
+
+### Fix
+
+* fix: fix size ([`bf0aeb2`](https://github.com/xevg/backblaze_status/commit/bf0aeb226256ef3feb6457b912d5399e66b3e394))
+
+* fix: remove publishing ([`ac2bf0e`](https://github.com/xevg/backblaze_status/commit/ac2bf0e0b58d900b173661080a9122f5de25a052))
+
+* fix: add sphinx ([`de0f486`](https://github.com/xevg/backblaze_status/commit/de0f4868abfdd4303e9c7aa2acb510f9ab10bd4d))
+
+
+## v0.1.3 (2024-02-17)
 
 ### Fix
 
