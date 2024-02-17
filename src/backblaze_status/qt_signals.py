@@ -20,11 +20,15 @@ class Signals(QObject):
 
     to_do_available = pyqtSignal()
     start_new_file = pyqtSignal(str)
+    files_updated = pyqtSignal()
 
     # Modes
 
     preparing = pyqtSignal()
     transmitting = pyqtSignal(str)
+
+    # Backup Running
+    backup_running = pyqtSignal(bool)
 
     # update_data_table_last_row = pyqtSignal(list, name="update_data_table_last_row")
     # update_log = pyqtSignal(str)
