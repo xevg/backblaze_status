@@ -17,7 +17,7 @@ class BackupFile:
 
     file_name: Path
     file_size: int
-    list_index: int
+    list_index: int = 0
 
     timestamp: datetime = field(default=datetime.now())
     completed: bool = False
@@ -34,8 +34,9 @@ class BackupFile:
     _current_chunk: int = 0
     batch: BzBatch = None
     _rate: str = str()
+    completed_run: int = 0
 
-    start_time: datetime = 0
+    start_time: datetime = datetime.now()
     end_time: datetime = 0
 
     row_color: Optional[QColor] = field(default=None)
