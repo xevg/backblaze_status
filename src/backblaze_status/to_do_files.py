@@ -9,7 +9,7 @@ from typing import List, Optional
 from PyQt6.QtGui import QColor
 
 from .backup_file import BackupFile
-from .completed_files import CompletedFiles
+from .backup_file_list import BackupFileList
 from .configuration import Configuration
 from .dev_debug import DevDebug
 from .exceptions import CompletedFileNotFound
@@ -27,37 +27,81 @@ class ToDoFiles:
     Class to store the list and status of To Do files
     """
 
+    # An instance of the QTBackupStatus
     qt: "QTBackupStatus" = field(default=None, init=True)
-    _todo_file_name: str = field(default_factory=str, init=False)
-    _file_list: List[BackupFile] = field(default_factory=list, init=False)
-    _file_dict: dict[str, BackupFile] = field(default_factory=dict, init=False)
-    _completed_files: CompletedFiles = field(default_factory=CompletedFiles, init=False)
 
+    # These two hold the list of to do files. The _file_list is a list in order,
+    # and the _file_dict contains a dictionary of the files by file_name. The
+    # BackupFile class has a pointer to the list, so that it can be retrieved that
+    # way as well.
+
+    _to_do_file_list: BackupFileList = field(default_factory=BackupFileList, init=False)
+
+    # The _completed_files class contains the list of completed files
+    _completed_file_list: BackupFileList = field(
+        default_factory=BackupFileList, init=False
+    )
+
+    _invalid_file_list: BackupFileList = field(
+        default_factory=BackupFileList, init=False
+    )
+
+    # Storage for the modification time of the current to do file
     _file_modification_time: float = field(default=0.0, init=False)
+
+    # Flag for if the backup is currently running
     _backup_running: bool = field(default=False, init=False)
+
+    # The current file that is being backed up
     _current_file: BackupFile = field(default=None, init=False)
 
+    # The current run
+    _current_run: int = 1
+
+    # Storage for the current to_do file
+    _todo_file_name: str = field(default_factory=str, init=False)
+
+    # To save processing time, this is a cache for values so they don't need to be
+    # recalculated each time
     cache: dict = field(default_factory=dict, init=False)
+
+    # The directory where the to_do files live
     BZ_DIR: str = field(
         default="/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/", init=False
     )
 
     def __post_init__(self):
+        # Set up the logger and debugging
         self._multi_log = MultiLogger("ToDoFiles", terminal=True)
         self._module_name = self.__class__.__name__
         self._multi_log.log("Creating ToDoFiles")
         self.debug = DevDebug()
 
-        self._file_dict = dict()
-        self._file_list = list()
+        if self.qt:
+            self.qt.signals.files_updated.connect(lambda: self.cache.clear())
 
+        # Do the initial read of the to_do file
         self._read()
+
+        # Start a thread that checks to see if the to_do file has changed, and if it
+        # has, re-read it
         self._reread_file_thread = threading.Thread(
             target=self.reread_to_do_list,
             daemon=True,
             name="reread_to_do_list",
         )
         self._reread_file_thread.start()
+
+    def __len__(self) -> int:
+        return len(self._to_do_file_list.file_list)
+
+    def __getitem__(self, index) -> BackupFile:
+        if isinstance(index, int):
+            return self._to_do_file_list.file_list[index]
+        elif isinstance(index, str):
+            return self._to_do_file_list.file_dict.get(index)
+        else:
+            raise TypeError("Invalid argument type")
 
     def _read(self) -> None:
         """
@@ -76,8 +120,8 @@ class ToDoFiles:
             file = Path(self._todo_file_name)
             stat = file.stat()
             self._file_modification_time = stat.st_mtime
+
             with open(file, "r") as tdf:
-                list_index = 0
                 for todo_line in tdf:
                     todo_fields = todo_line.strip().split("\t")
                     todo_filename = Path(todo_fields[5])
@@ -85,40 +129,65 @@ class ToDoFiles:
                         continue
 
                     todo_file_size = int(todo_fields[4])
-                    backup = BackupFile(todo_filename, todo_file_size, list_index)
+                    backup = BackupFile(todo_filename, todo_file_size)
                     if todo_file_size > Configuration.default_chunk_size:
                         backup.chunks_total = int(
                             todo_file_size / Configuration.default_chunk_size
                         )
                         backup.large_file = True
-                    self._file_list.append(backup)
-                    self._file_dict[str(todo_filename)] = backup
+                    self._to_do_file_list.append(backup)
 
-                    list_index += 1
             self._backup_running = True
             if self.qt is not None:
+                self.qt.signals.backup_running.emit(True)
+                self.qt.signals.files_updated.emit()
                 self.qt.result_data.layoutChanged.emit()
 
     def reread_to_do_list(self):
+        """
+        Checks to see if there is a new to_do file, and if there is, reread it
+        """
         while True:
             time.sleep(60.0)  # Check the file every minute
+            if not self._backup_running:
+                # If the backup isn't running, check to see if there is a to_do file.
+                # If there is not, then loop and wait till there is
+                self._todo_file_name = self.get_to_do_file()
+                if self._todo_file_name is not None:
+                    # If there is a new to_do file, then read it, after incrementing the
+                    # run number
+                    self._current_run += 1
+                    self._read()
+                    self._backup_running = True
+                    if self.qt:
+                        self.qt.signals.backup_running.emit(True)
+                continue
+
             try:
                 file = Path(self._todo_file_name)
                 stat = file.stat()
             except FileNotFoundError:
+                # If the backup is complete, then clear out the to_do list
                 self._multi_log.log("Backup Complete")
                 self._backup_running = False
-                self._file_list.clear()
-                self._file_dict.clear()
-                self._todo_file_name = self.get_to_do_file()
-                file = Path(self._todo_file_name)
-                stat = file.stat()
+                self._to_do_file_list.clear()
+                self.cache.clear()
+                if self.qt:
+                    self.qt.signals.backup_running.emit(False)
+                    self.qt.signals.files_updated.emit()
+                continue
 
+            # Check to see if the modification time has changed. If it has,
+            # then reread the file. I'm not sure if this is really necessary. Check
+            # the logs for it
             if self._file_modification_time != stat.st_mtime:
                 self._multi_log.log("To Do file changed, rereading")
                 self._read()
 
     def get_to_do_file(self) -> str:
+        """
+        Get the name of the current to_do file
+        """
         while True:
             to_do_file = None
             # Get the list of to_do and done files in the directory
@@ -133,8 +202,6 @@ class ToDoFiles:
                 self._multi_log.log(
                     f"Backup not running. Waiting for 1 minute and trying again ..."
                 )
-
-                # TODO: Make this a progress bar ...
                 time.sleep(60)
 
             else:
@@ -143,20 +210,37 @@ class ToDoFiles:
 
     @property
     def current_file(self) -> BackupFile:
-        with Lock.DB_LOCK:
-            return self._current_file
+        """
+        Return the file currently being backed up
+        """
+        return self._current_file
 
     @current_file.setter
     def current_file(self, value: BackupFile) -> None:
+        """
+        Set the file that is currently being backed up
+        """
         with Lock.DB_LOCK:
             self._current_file = value
+            # while self._to_do_file_list.file_list[0] != self._current_file:
+            #     item: BackupFile = self._to_do_file_list[0]
+            #     item.completed_run = self._current_run
+            #     self._invalid_file_list.append(item)
+            #     self._to_do_file_list.remove(item)
 
     @property
-    def file_list(self) -> list[BackupFile]:
-        return self._file_list
+    def to_do_file_list(self) -> BackupFileList:  #  list[BackupFile]:
+        """
+        Return all the files that are remaining on the to_do list
+        """
+        # return self._to_do_file_list.file_list
+        return self._to_do_file_list
 
     def get_file(self, filename: str) -> Optional[BackupFile]:
-        return self._file_dict.get(filename)
+        """
+        Get the backup file with the given filename
+        """
+        return self._to_do_file_list.get(filename)
 
     def exists(self, filename) -> bool:
         """
@@ -164,15 +248,16 @@ class ToDoFiles:
         :param filename:
         :return:
         """
-        return filename in self._file_dict
+        return filename in self._to_do_file_list.file_dict
 
-    def get_index(self, filename) -> int:
-        if filename in self._file_dict:
-            return self._file_dict[filename].list_index
-        else:
-            raise NotFound
+    # No one is using this function
+    # def get_index(self, filename) -> int:
+    #     if filename in self._file_dict:
+    #         return self._file_dict[filename].list_index
+    #     else:
+    #         raise NotFound
 
-    def completed(self, filename: str) -> None:
+    def mark_completed(self, filename: str) -> None:
         """
         Mark a file as completed
 
@@ -198,7 +283,12 @@ class ToDoFiles:
         with Lock.DB_LOCK:
             completed_file.completed = True
             completed_file.end_time = datetime.now()
-            self.completed_files.append(completed_file)
+            completed_file.completed_run = self._current_run
+
+            # Move the completed items to the completed file list
+
+            self._completed_file_list.append(completed_file)
+            # self._to_do_file_list.remove(completed_file)
 
             # Define the color based on whether it is deduped or not
             # TODO: Should this color selection move to the model?
@@ -206,6 +296,7 @@ class ToDoFiles:
                 completed_file.row_color = QColor("orange")
 
         if self.qt is not None:
+            self.qt.signals.files_updated.emit()
             self.qt.result_data.layoutChanged.emit()
 
     def add_file(
@@ -214,12 +305,14 @@ class ToDoFiles:
         is_chunk: bool = False,
         timestamp: datetime = datetime.now(),
     ):
+        """
+        Add a file that isn't on the to_do list
+        """
         if not self.exists(str(filename)):
             # invalidate the cache
             self.cache = dict()
 
             with Lock.DB_LOCK:
-                list_index = len(self.file_list)
                 try:
                     _stat = filename.stat()
                     file_size = _stat.st_size
@@ -229,7 +322,6 @@ class ToDoFiles:
                 backup_file = BackupFile(
                     filename,
                     file_size,
-                    list_index,
                     timestamp=timestamp,
                 )
 
@@ -241,77 +333,64 @@ class ToDoFiles:
                     )
                     backup_file.large_file = True
 
-                self._file_list.append(backup_file)
-                self._file_dict[str(filename)] = backup_file
+                self._to_do_file_list.append(backup_file)
 
-    def get_remaining_files(
-        self, start_index: int = 0, number_of_rows: int = 0
-    ) -> list:
-        start_index += 1
-        count_of_rows = 0
-        with Lock.DB_LOCK:
-            result_list = []
-            for item in self._file_list[start_index:]:  # type: BackupFile
-                if not item.completed:
-                    count_of_rows += 1
-                    if count_of_rows > number_of_rows:
-                        break
-                    result_list.append(item)
+    # This doesn't seem to be being used
+    # def get_remaining_files(
+    #     self, start_index: int = 0, number_of_rows: int = 0
+    # ) -> list:
+    #     start_index += 1
+    #     count_of_rows = 0
+    #     with Lock.DB_LOCK:
+    #         result_list = []
+    #         for item in self._file_list[start_index:]:  # type: BackupFile
+    #             if not item.completed:
+    #                 count_of_rows += 1
+    #                 if count_of_rows > number_of_rows:
+    #                     break
+    #                 result_list.append(item)
+    #
+    #         return result_list
 
-            return result_list
-
-    @property
-    def previous_files(self) -> list:
-        result = [
-            backup_file for backup_file in self._file_list if backup_file.previous_run
-        ]
-        return result
+    # @property
+    # def previous_files(self) -> list:
+    #     result = [
+    #         backup_file for backup_file in self._file_list if backup_file.previous_run
+    #     ]
+    #     return result
 
     @property
     def completed_files(self) -> list:
-        result = [
-            backup_file
-            for backup_file in self._file_list
-            if backup_file.completed and backup_file.previous_run
-        ]
-        return result
+        return self._completed_file_list.file_list
 
-    @property
-    def remaining_files(self) -> list:
-        result = [
-            backup_file
-            for backup_file in self._file_list
-            if not backup_file.completed and not backup_file.previous_run
-        ]
-        return result
-
-    def todo_files(self, count=1000000000, filename: str = None):
-        """
-        Retrieve the next N filenames. If no filename is specified, just start from
-        the beginning of the list. If a filename is specified, start from the one
-        after that.
-
-        This is a generator function.
-
-        :param count:
-        :param filename:
-        :return:
-        """
-        starting_index = 0
-        counter = 1
-        with Lock.DB_LOCK:
-            if filename is not None:
-                starting_index = self._file_dict[filename].list_index
-
-            result_list = []
-            for item in self._file_list[starting_index:]:
-                if not item.completed:
-                    result_list.append(item)
-                    counter += 1
-                    if counter > count:
-                        break
-
-            return result_list
+    # This is not being used
+    # def todo_files(self, count=1000000000, filename: str = None):
+    #     """
+    #     Retrieve the next N filenames. If no filename is specified, just start from
+    #     the beginning of the list. If a filename is specified, start from the one
+    #     after that.
+    #
+    #     This is a generator function.
+    #
+    #     :param count:
+    #     :param filename:
+    #     :return:
+    #     """
+    #     starting_index = 0
+    #     counter = 1
+    #     with Lock.DB_LOCK:
+    #         if filename is not None:
+    #             starting_index = self._file_dict[filename].list_index
+    #
+    #         result_list = []
+    #         for item in self._file_list[starting_index:]:
+    #             if not item.completed:
+    #                 result_list.append(item)
+    #                 counter += 1
+    #                 if counter > count:
+    #                     break
+    #
+    #         return result_list
 
     @property
     def backup_running(self) -> bool:
@@ -325,25 +404,14 @@ class ToDoFiles:
 
         with Lock.DB_LOCK:
             size = sum(
-                backup_file.file_size
-                for backup_file in self._file_list
-                if not backup_file.completed
+                backup_file.file_size for backup_file in self._to_do_file_list.file_list
             )
             self.cache["remaining_size"] = size
             return size
 
-    @property
-    def remaining_files(self) -> int:
-        cached = self.cache.get("remaining_files")
-        if cached:
-            return cached
-
-        with Lock.DB_LOCK:
-            files = sum(
-                1 for backup_file in self._file_list if not backup_file.completed
-            )
-            self.cache["remaining_files"] = files
-            return files
+    # @property
+    # def remaining_files(self) -> list:
+    #     return self._file_list
 
     def _completed_size(
         self, _transmitted_size: bool = True, _deduped_size: bool = True
@@ -351,27 +419,25 @@ class ToDoFiles:
         with Lock.DB_LOCK:
             size = sum(
                 backup_file.file_size
-                for backup_file in self._file_list
-                if backup_file.completed and not backup_file.previous_run
+                for backup_file in self._completed_file_list.file_list
+                if backup_file.completed_run == self._current_run
             )
 
             if _deduped_size:
                 size += sum(
                     len(backup_file.chunks_deduped) * Configuration.default_chunk_size
-                    for backup_file in self._file_list
+                    for backup_file in self._completed_file_list.file_list
                     if backup_file.large_file
-                    and backup_file.completed
-                    and not backup_file.previous_run
+                    and backup_file.completed_run == self._current_run
                 )
 
             if _transmitted_size:
                 size += sum(
                     len(backup_file.chunks_transmitted)
                     * Configuration.default_chunk_size
-                    for backup_file in self._file_list
+                    for backup_file in self._completed_file_list.file_list
                     if backup_file.large_file
-                    and backup_file.completed
-                    and not backup_file.previous_run
+                    and backup_file.completed_run == self._current_run
                 )
 
             return size
@@ -398,7 +464,7 @@ class ToDoFiles:
 
     @property
     def duplicate_size(self) -> int:
-        cached = self.cache.get("transmitted_size")
+        cached = self.cache.get("duplicate_size")
         if cached:
             return cached
 
@@ -415,8 +481,8 @@ class ToDoFiles:
         with Lock.DB_LOCK:
             files = sum(
                 1
-                for backup_file in self._file_list
-                if backup_file.completed and not backup_file.previous_run
+                for backup_file in self._completed_file_list.file_list
+                if backup_file.completed_run == self._current_run
             )
 
         self.cache["completed_file_count"] = files
@@ -430,9 +496,12 @@ class ToDoFiles:
 
         with Lock.DB_LOCK:
             size = sum(
+                backup_file.file_size for backup_file in self._to_do_file_list.file_list
+            )
+            size += sum(
                 backup_file.file_size
-                for backup_file in self._file_list
-                if not backup_file.previous_run
+                for backup_file in self._completed_file_list
+                if backup_file.completed_run == self._current_run
             )
 
         self.cache["total_size"] = size
@@ -440,10 +509,19 @@ class ToDoFiles:
 
     @property
     def total_file_count(self) -> int:
+        cached = self.cache.get("total_file_count")
+        if cached:
+            return cached
+
         with Lock.DB_LOCK:
-            return sum(
-                1 for backup_file in self._file_list if not backup_file.previous_run
+            file_count = len(self._to_do_file_list.file_list)
+            file_count += sum(
+                1
+                for backup_file in self._completed_file_list
+                if backup_file.completed_run == self._current_run
             )
+            self.cache["total_file_count"] = file_count
+            return file_count
 
     @property
     def duplicate_file_count(self) -> int:
@@ -454,8 +532,9 @@ class ToDoFiles:
         with Lock.DB_LOCK:
             files = sum(
                 1
-                for backup_file in self._file_list
-                if backup_file.is_deduped and not backup_file.previous_run
+                for backup_file in self._completed_file_list.file_list
+                if backup_file.is_deduped
+                and backup_file.completed_run == self._current_run
             )
             self.cache["duplicate_file_count"] = files
             return files
@@ -469,10 +548,21 @@ class ToDoFiles:
         with Lock.DB_LOCK:
             files = sum(
                 1
-                for backup_file in self._file_list
+                for backup_file in self._completed_file_list.file_list
                 if not backup_file.is_deduped
-                and backup_file.completed
-                and not backup_file.previous_run
+                and backup_file.completed_run == self._current_run
             )
             self.cache["transmitted_file_count"] = files
             return files
+
+    @property
+    def completed_file_list(self) -> BackupFileList:
+        return self._completed_file_list
+
+    @property
+    def invalid_file_list(self) -> BackupFileList:
+        return self._invalid_file_list
+
+    @property
+    def current_run(self) -> int:
+        return self._current_run

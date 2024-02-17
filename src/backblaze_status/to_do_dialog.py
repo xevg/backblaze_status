@@ -116,7 +116,7 @@ class ToDoDialog(QDialog):
 
         start_index = self.model.get_to_do_start_index()
 
-        to_do_cache = to_do.file_list[start_index:]
+        to_do_cache = to_do.to_do_file_list[start_index:]
         total_to_back_up = 0
         for file in to_do_cache:  # type: BackupFile
             total_to_back_up += file.file_size
