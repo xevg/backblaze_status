@@ -2,7 +2,22 @@
 
 
 
-## v0.2.0 (2024-02-16)
+## v0.3.0 (2024-02-16)
+
+### Feature
+
+* feat: add backup_state_change ([`529c2f6`](https://github.com/xevg/backblaze_status/commit/529c2f67f916f1afd21399c59d09651bb32ca6d5))
+
+* feat: add index ([`a1be053`](https://github.com/xevg/backblaze_status/commit/a1be0535d664f650e413b32ac8e1f47ae9eea478))
+
+* feat: fix version number ([`50739a0`](https://github.com/xevg/backblaze_status/commit/50739a09c6d1b3a99e9195a1e679a70bd0880b45))
+
+### Fix
+
+* fix: change completed size ([`ffedcd1`](https://github.com/xevg/backblaze_status/commit/ffedcd15111e3c5e2b56e97457ae3af5a1187182))
+
+
+## v0.2.0 (2024-02-17)
 
 ### Feature
 
