@@ -2,6 +2,13 @@
 
 
 
+## v0.5.0 (2024-02-17)
+
+### Feature
+
+* feat: trying new version ([`e9b0144`](https://github.com/xevg/backblaze_status/commit/e9b014489cfd724654250749406332c65bfc9d5d))
+
+
 ## v0.4.0 (2024-02-17)
 
 ### Feature
