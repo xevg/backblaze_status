@@ -2,7 +2,24 @@
 
 
 
-## v0.1.1 (2024-02-16)
+## v0.1.2 (2024-02-16)
+
+### Fix
+
+* fix: add sphinx ([`e54a314`](https://github.com/xevg/backblaze_status/commit/e54a31468948b6ae0c2ac2f4424d2f8471bd157d))
+
+* fix: remove testing for now ([`15654ab`](https://github.com/xevg/backblaze_status/commit/15654ab62278095ea8bca8efe9928437b761e836))
+
+* fix: add test ([`a76abc2`](https://github.com/xevg/backblaze_status/commit/a76abc2c01b983dd9b38a26a0047a2a3cc195900))
+
+* fix: add test ([`39b58a9`](https://github.com/xevg/backblaze_status/commit/39b58a9ed9f48d18ab68b5abeb424cb0efde71c1))
+
+* fix: get rid og test ([`f537e32`](https://github.com/xevg/backblaze_status/commit/f537e326339af84380bde4afc4c296eb7553c90e))
+
+* fix: added pytest ([`1bf5a12`](https://github.com/xevg/backblaze_status/commit/1bf5a127694d0484a2555baa39f0f0aae1216e80))
+
+
+## v0.1.1 (2024-02-17)
 
 ### Fix
 
