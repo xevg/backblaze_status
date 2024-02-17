@@ -26,7 +26,7 @@ sphinx-rtd-theme = "^2.0.0"
 myst-nb = "^1.0.0"
 
 [tool.semantic_release]
-version_variable = "pyproject.toml:version" # version location
+version_variable = "pyproject.toml:version"
 branch = "main"                             # branch to make releases of
 changelog_file = "CHANGELOG.md"             # changelog file
 build_command = "poetry build"              # build dists

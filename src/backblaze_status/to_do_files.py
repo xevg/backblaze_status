@@ -413,42 +413,29 @@ class ToDoFiles:
     # def remaining_files(self) -> list:
     #     return self._file_list
 
-    def _completed_size(
-        self, _transmitted_size: bool = True, _deduped_size: bool = True
-    ) -> int:
-        with Lock.DB_LOCK:
-            size = sum(
-                backup_file.file_size
-                for backup_file in self._completed_file_list.file_list
-                if backup_file.completed_run == self._current_run
-            )
-
-            if _deduped_size:
-                size += sum(
-                    len(backup_file.chunks_deduped) * Configuration.default_chunk_size
-                    for backup_file in self._completed_file_list.file_list
-                    if backup_file.large_file
-                    and backup_file.completed_run == self._current_run
-                )
-
-            if _transmitted_size:
-                size += sum(
-                    len(backup_file.chunks_transmitted)
-                    * Configuration.default_chunk_size
-                    for backup_file in self._completed_file_list.file_list
-                    if backup_file.large_file
-                    and backup_file.completed_run == self._current_run
-                )
-
-            return size
-
     @property
     def completed_size(self) -> int:
         cached = self.cache.get("completed_size")
         if cached:
             return cached
 
-        size = self._completed_size(_transmitted_size=True, _deduped_size=True)
+        size = sum(
+            backup_file.file_size
+            for backup_file in self._completed_file_list.file_list
+            if backup_file.completed_run == self._current_run
+        )
+
+        size += sum(
+            len(backup_file.chunks_deduped) * Configuration.default_chunk_size
+            for backup_file in self._completed_file_list.file_list
+            if backup_file.large_file and backup_file.completed_run == self._current_run
+        )
+
+        size += sum(
+            len(backup_file.chunks_transmitted) * Configuration.default_chunk_size
+            for backup_file in self._completed_file_list.file_list
+            if backup_file.large_file and backup_file.completed_run == self._current_run
+        )
         self.cache["completed_size"] = size
         return size
 
@@ -458,7 +445,19 @@ class ToDoFiles:
         if cached:
             return cached
 
-        size = self._completed_size(_transmitted_size=True, _deduped_size=False)
+        size = sum(
+            backup_file.file_size
+            for backup_file in self._completed_file_list.file_list
+            if backup_file.completed_run == self._current_run
+            and not backup_file.is_deduped
+        )
+
+        size += sum(
+            len(backup_file.chunks_transmitted) * Configuration.default_chunk_size
+            for backup_file in self._completed_file_list.file_list
+            if backup_file.large_file and backup_file.completed_run == self._current_run
+        )
+
         self.cache["transmitted_size"] = size
         return size
 
@@ -468,7 +467,17 @@ class ToDoFiles:
         if cached:
             return cached
 
-        size = self._completed_size(_transmitted_size=False, _deduped_size=True)
+        size = sum(
+            backup_file.file_size
+            for backup_file in self._completed_file_list.file_list
+            if backup_file.completed_run == self._current_run and backup_file.is_deduped
+        )
+
+        size += sum(
+            len(backup_file.chunks_deduped) * Configuration.default_chunk_size
+            for backup_file in self._completed_file_list.file_list
+            if backup_file.large_file and backup_file.completed_run == self._current_run
+        )
         self.cache["duplicate_size"] = size
         return size
 
