@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "backblaze_status"
-version = "0.2.0"
+version = "0.3.0"
 description = "Looking at the state of the Backblaze backup"
 authors = ["Xev Gittler"]
 license = "MIT"
@@ -26,7 +26,7 @@ sphinx-rtd-theme = "^2.0.0"
 myst-nb = "^1.0.0"
 
 [tool.semantic_release]
-version_variable = "pyproject.toml:version"
+version_toml = ["pyproject.toml:tool.poetry.version"]
 branch = "main"                             # branch to make releases of
 changelog_file = "CHANGELOG.md"             # changelog file
 build_command = "poetry build"              # build dists
@@ -35,6 +35,9 @@ upload_to_release = true                    # auto-create GitHub release
 upload_to_pypi = false                      # don't auto-upload to PyPI
 remove_dist = false                         # don't remove dists
 patch_without_tag = true                    # patch release by default
+
+[tool.semantic_release.remote.token]
+env = "GH_TOKEN"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
