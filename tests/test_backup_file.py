@@ -28,11 +28,11 @@ class TestBackupFile:
         assert backup_file._deduped_bytes == 0
         assert backup_file._transmitted_bytes == 0
         assert backup_file._total_bytes_processed == 0
-        assert backup_file.large_file == False
+        assert backup_file.is_large_file == False
         assert backup_file._chunks_total == 0
-        assert backup_file.chunks_prepared == set()
-        assert backup_file.chunks_deduped == set()
-        assert backup_file.chunks_transmitted == set()
+        assert backup_file._prepared_chunks == set()
+        assert backup_file._deduped_chunks == set()
+        assert backup_file._transmitted_chunks == set()
         assert backup_file._current_chunk == 0
         assert backup_file.batch is None
         assert backup_file._rate == ""
@@ -81,11 +81,11 @@ class TestBackupFile:
             _deduped_bytes=deduped_bytes,
             _transmitted_bytes=transmitted_bytes,
             _total_bytes_processed=total_bytes_processed,
-            large_file=large_file,
+            is_large_file=large_file,
             _chunks_total=chunks_total,
-            chunks_prepared=chunks_prepared,
-            chunks_deduped=chunks_deduped,
-            chunks_transmitted=chunks_transmitted,
+            _prepared_chunks=chunks_prepared,
+            _deduped_chunks=chunks_deduped,
+            _transmitted_chunks=chunks_transmitted,
             _current_chunk=current_chunk,
             batch=batch,
             _rate=rate,
@@ -110,11 +110,11 @@ class TestBackupFile:
         assert backup_file._deduped_bytes == deduped_bytes
         assert backup_file._transmitted_bytes == transmitted_bytes
         assert backup_file._total_bytes_processed == total_bytes_processed
-        assert backup_file.large_file == large_file
+        assert backup_file.is_large_file == large_file
         assert backup_file._chunks_total == chunks_total
-        assert backup_file.chunks_prepared == chunks_prepared
-        assert backup_file.chunks_deduped == chunks_deduped
-        assert backup_file.chunks_transmitted == chunks_transmitted
+        assert backup_file._prepared_chunks == chunks_prepared
+        assert backup_file._deduped_chunks == chunks_deduped
+        assert backup_file._transmitted_chunks == chunks_transmitted
         assert backup_file._current_chunk == current_chunk
         assert backup_file.batch == batch
         assert backup_file._rate == rate
