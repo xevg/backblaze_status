@@ -106,7 +106,6 @@ class BackupFile(MappedAsDataclass, Base):
     )
 
     def __init__(self, *args, **kwargs):
-
         super().__init__(*args, **kwargs)
         self.debug = DevDebug()
         self.debug.disable("lock")
@@ -133,7 +132,7 @@ class BackupFile(MappedAsDataclass, Base):
 
         yield "timestamp", self.timestamp
 
-        yield "chunks_total", self.chunks_total
+        yield "total_chunk_count", self.chunks_total
         yield "current_chunk", self.current_chunk
 
         yield "chunks_prepared", self.chunks_prepared
@@ -148,7 +147,6 @@ class BackupFile(MappedAsDataclass, Base):
 
     @lock(Lock.DB_LOCK)
     def add_prepared(self, chunk_number: int) -> None:
-
         with DBSession.session as session:
             try:
                 new_chunk: ChunksPrepared = ChunksPrepared(id=chunk_number)
@@ -164,10 +162,8 @@ class BackupFile(MappedAsDataclass, Base):
 
     @lock(Lock.DB_LOCK)
     def add_deduped(self, chunk_number: int):
-
         with DBSession.session as session:
             try:
-
                 new_chunk: ChunksDeduped = ChunksDeduped(id=chunk_number)
                 self.chunks_deduped.add(new_chunk)
                 self.current_chunk = chunk_number
@@ -181,10 +177,8 @@ class BackupFile(MappedAsDataclass, Base):
 
     @lock(Lock.DB_LOCK)
     def add_transmitted(self, chunk_number: int):
-
         with DBSession.session as session:
             try:
-
                 new_chunk: ChunksTransmitted = ChunksTransmitted(id=chunk_number)
                 self.chunks_transmitted.add(new_chunk)
                 self.current_chunk = chunk_number
