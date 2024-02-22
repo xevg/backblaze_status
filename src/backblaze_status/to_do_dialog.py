@@ -1,9 +1,10 @@
+from __future__ import annotations
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QLabel,
     QDialogButtonBox,
-    QTableWidget,
+    QTableView,
     QTableWidgetItem,
     QHeaderView,
     QTableWidgetItem,
@@ -15,26 +16,36 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtGui import QColor
 from .backup_file import BackupFile
 from .utils import file_size_string
 from .bz_data_table_model import BzDataTableModel
+from .to_do_files import ToDoFiles
+from .css_styles import CssStyles
+from .to_do_dialog_model import ToDoDialogModel
 
 
 class ToDoDialog(QDialog):
-    def __init__(self, model: BzDataTableModel):
+    def __init__(self, qt, model: ToDoDialogModel):
         super().__init__()
 
+        self.qt: "QTBackupStatus" = qt
         self.model = model
 
-        self.matching_items = None
-        self.current_matching_item = 0
+        self.setStyleSheet(CssStyles.dark_orange)
+        self.matching_indexes = None
+        self.current_matching_index: int = 0
 
-        self.setWindowTitle("Remaining To Do Items")
+        self.setWindowTitle("To Do Items")
         self.setSizePolicy(
             QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding
         )
 
         self.search_group_box = QGroupBox("Search")
+
+        self.current_button = QPushButton("Current Item", parent=self.search_group_box)
+        self.current_button.clicked.connect(self.current)
+
         self.query = QLineEdit()
         self.query.setClearButtonEnabled(True)
         self.query.setPlaceholderText("Search...")
@@ -53,6 +64,7 @@ class ToDoDialog(QDialog):
 
         self.search_layout = QHBoxLayout()
 
+        self.search_layout.addWidget(self.current_button)
         self.search_layout.addWidget(self.query)
         self.search_layout.addWidget(self.query_results)
         self.search_layout.addWidget(self.previous_button)
@@ -65,117 +77,130 @@ class ToDoDialog(QDialog):
 
         self.layout = QVBoxLayout()
 
-        self.table = QTableWidget(self)
-
-        column_names = ["File Size", "File Name", "Backup Total"]
-        self.table.setColumnCount(len(column_names))
-        self.table.setRowCount(0)
-        for index, column_name in enumerate(column_names):
-            item = QTableWidgetItem(column_name)
-            if index == 1:
-                item.setTextAlignment(
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                )
-            else:
-                item.setTextAlignment(
-                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-                )
-            self.table.setHorizontalHeaderItem(index, item)
-
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        size_policy = QSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Expanding,
-        )
-        self.table.setSizePolicy(size_policy)
-        self.table.horizontalHeader().setStretchLastSection(False)
-        self.table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
+        self.table = self._create_data_model_table()
+        self.table.setModel(self.model)
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
-        self.table.verticalHeader().setVisible(True)
 
-        self.reset_list()
+        if self.qt is not None:
+            self.qt.signals.files_updated.connect(self.model.update_display_cache)
+
         self.setSizeGripEnabled(True)
         self.layout.addWidget(self.search_group_box)
         self.layout.addWidget(self.table)
         self.layout.addWidget(self.button_box)
         self.setLayout(self.layout)
 
-    def reset_list(self):
-        from .to_do_files import ToDoFiles
+        if self.qt is not None:
+            self.qt.signals.files_updated.connect(self.update_display_cache)
 
-        self.table.clearContents()
-        self.table.setRowCount(0)
+        self.update_display_cache()
+
+    def update_display_cache(self):
+        if self.isVisible():
+            self.model.update_display_cache()
+
+    def current(self):
         to_do: ToDoFiles = self.model.qt.backup_status.to_do
-        if not to_do:
-            return
-
-        start_index = self.model.get_to_do_start_index()
-
-        to_do_cache = to_do.to_do_file_list[start_index:]
-        total_to_back_up = 0
-        for file in to_do_cache:  # type: BackupFile
-            total_to_back_up += file.file_size
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            self.table.setItem(row, 1, QTableWidgetItem(str(file.file_name)))
-            self.table.setItem(
-                row, 0, QTableWidgetItem(file_size_string(file.file_size))
-            )
-            self.table.setItem(
-                row, 2, QTableWidgetItem(file_size_string(total_to_back_up))
+        if to_do is not None and to_do.current_file is not None:
+            index = to_do.to_do_file_list.file_list.index(to_do.current_file)
+            model_index = self.model.index(index, 0)
+            self.table.scrollTo(
+                model_index,
+                hint=QAbstractItemView.ScrollHint.PositionAtCenter,
             )
 
-        self.table.resizeColumnsToContents()
-
-    def search(self, s):
-        self.table.setCurrentItem(None)
-        if not s:
+    def search(self, search_string: str):
+        # self.table.setCurrentItem(None)
+        if not search_string:
             # Empty string, don't search.
             self.previous_button.setDisabled(True)
             self.next_button.setDisabled(True)
             self.query_results.hide()
             return
 
-        self.matching_items = self.table.findItems(s, Qt.MatchFlag.MatchContains)
-        if self.matching_items:
+        self.matching_indexes = self.model.match(
+            self.model.index(0, 1),
+            Qt.ItemDataRole.DisplayRole,
+            search_string,
+            hits=1000,
+            flags=Qt.MatchFlag.MatchContains,
+        )
+        key_list = self.qt.backup_status.to_do.to_do_file_list.file_dict.keys()
+        if self.matching_indexes:
             self.query_results.setText(self.get_label_string())
 
             self.query_results.show()
             # we have found something
-            item = self.matching_items[0]  # take the first
-            self.table.setCurrentItem(item)
+            index = self.matching_indexes[0]  # take the first
+            self.table.scrollTo(
+                index, hint=QAbstractItemView.ScrollHint.PositionAtCenter
+            )
+            self.table.selectRow(index.row())
             self.previous_button.setDisabled(False)
             self.previous_button.setDefault(False)
             self.next_button.setDisabled(False)
         else:
+            self.query_results.setText("No matches")
             self.previous_button.setDisabled(True)
             self.next_button.setDisabled(True)
 
     def next(self):
-        next_item = self.current_matching_item + 1
-        if len(self.matching_items) < next_item:
+        next_item = self.current_matching_index + 1
+        if len(self.matching_indexes) <= next_item:
             next_item = 0
-        self.current_matching_item = next_item
-        self.table.setCurrentItem(self.matching_items[next_item])
+        self.current_matching_index = next_item
+        self.table.scrollTo(
+            self.matching_indexes[next_item],
+            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
+        self.table.selectRow(self.matching_indexes[next_item].row())
         self.query_results.setText(self.get_label_string())
 
     def previous(self):
-        previous_item = self.current_matching_item - 1
+        previous_item = self.current_matching_index - 1
         if previous_item < 0:
-            previous_item = len(self.matching_items) - 1
-        self.current_matching_item = previous_item
-        self.table.setCurrentItem(self.matching_items[previous_item])
+            previous_item = len(self.matching_indexes) - 1
+        self.current_matching_index = previous_item
+        self.table.scrollTo(
+            self.matching_indexes[previous_item],
+            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
+        self.table.selectRow(self.matching_indexes[previous_item].row())
         self.query_results.setText(self.get_label_string())
 
     def get_label_string(self):
         return (
-            f"{len(self.matching_items):,} matches ({self.current_matching_item + 1:,})"
+            f"{len(self.matching_indexes):,} matches ("
+            f"{self.current_matching_index + 1:,})"
         )
 
+    def _create_data_model_table(self) -> QTableView:
+        data_model_table = QTableView(self)
+        data_model_table.setObjectName("DialogModelTable")
+        data_model_table.setShowGrid(False)
+        size_policy = QSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding,
+        )
+        size_policy.setHeightForWidth(False)
+        data_model_table.setSizePolicy(size_policy)
+        # Table will fit the screen horizontally
+        data_model_table.horizontalHeader().setStretchLastSection(False)
+        data_model_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        data_model_table.verticalHeader().setVisible(True)
+        data_model_table.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        data_model_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        data_model_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+
+        return data_model_table
+
     def sizeHint(self):
-        return QSize(2000, 500)
+        return QSize(2300, 500)
