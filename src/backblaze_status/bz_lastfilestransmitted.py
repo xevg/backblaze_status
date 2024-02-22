@@ -184,6 +184,7 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
                 self._batch.add_file(_filename)
             case _:
                 print(f"Unrecognized line: {_line}")
+                return
 
         # At this point we have a filename. I take a look at the timestamp, because when I start up the monitor,
         #  there can be a lot of older information that I don't care about, so I discard anything over 4 hours old
@@ -222,11 +223,6 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
             # We have started transmitting, so set the marker for that
             self.qt.signals.transmitting.emit(_filename)
 
-        if _rate == "dedup":
-            dedup = True
-        else:
-            dedup = False
-
         # Get the file off of the to_list. I have to lock it so no other thread
         # reads/writes from it while I do
         backup_file = self.backup_list.get_file(str(_filename))  # type: BackupFile
@@ -235,18 +231,31 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
 
         if _rate:
             _rate = _rate.strip()
+            if _rate == "dedup":
+                dedup = True
+            else:
+                dedup = False
             # Keep track of how many files and bytes were deduplicated
             if dedup:
                 if chunk:
                     backup_file.add_deduped(_chunk_number)
+                    self.qt.chunk_model.layoutChanged.emit()
+                    # ic(f"chunk layoutChanged in lastfilestransmitted for dedup")
+
                 else:
                     file = Path(_filename[15:])
-                    backup_file.deduped_bytes += file.stat().st_size
+                    try:
+                        backup_file.deduped_bytes += file.stat().st_size
+                    except FileNotFoundError:
+                        pass
 
                 backup_file.is_deduped = True
             else:
                 if chunk:
                     backup_file.add_transmitted(_chunk_number)
+                    self.qt.chunk_model.layoutChanged.emit()
+                    # ic(f"chunk layoutChanged in lastfilestransmitted for transmitted")
+
                 else:
                     backup_file.transmitted_bytes += _bytes
                     backup_file.is_deduped = False
@@ -263,14 +272,6 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         backup_file.timestamp = _datetime
 
         return
-        # Send a notification to the display to let it output the data. Since there can be a *lot* of output,
-        #  especially if I'm catching up on the file, I throw a little delay in so that I don't overwhelm
-        #  the GUI event loop
-        if self.qt:
-            if _tell < self._file_size:
-                return
-            time.sleep(0.1)
-            self.qt.signals.update_log_line.emit(_filename)
 
     def read_file(self) -> None:
         while True:
