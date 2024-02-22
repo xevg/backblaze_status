@@ -4,8 +4,10 @@ import configparser
 
 
 class Configuration:
-    gb_divisor: int = 1000000000
-    tb_divisor: int = 1000000000000
+    kb_divisor: int = 1024
+    mb_divisor: int = 1024 * kb_divisor
+    gb_divisor: int = 1024 * mb_divisor  # 1000000000
+    tb_divisor: int = 1024 * gb_divisor  # 1000000000000
     default_chunk_size: int = 10485760
 
     default_feature_flags: dict = {
