@@ -9,6 +9,7 @@ from enum import IntEnum
 from .backup_file import BackupFile
 from .to_do_files import ToDoFiles
 from rich.pretty import pprint
+from icecream import ic
 
 
 class ChunkModel(QAbstractTableModel):
@@ -54,6 +55,7 @@ class ChunkModel(QAbstractTableModel):
 
     @filename.setter
     def filename(self, value: str):
+        # ic(f"set chunk filename to {value}")
         self._file_name = value
         self.reset_table()
         self.layoutChanged.emit()
@@ -64,7 +66,7 @@ class ChunkModel(QAbstractTableModel):
 
     def calculate_chunk(self, row: int, column: int) -> int:
         cell_size = self.table_size * self.table_size
-        multiplier = self.current_file.chunks_total / cell_size
+        multiplier = self.current_file.total_chunk_count / cell_size
         chunk = row * self.table_size + column
         chunk *= multiplier
         return int(chunk)
@@ -81,13 +83,14 @@ class ChunkModel(QAbstractTableModel):
         if to_do is None:
             return
 
-        self.current_file: BackupFile = to_do.get_file(self.filename)
+        self.current_file: BackupFile = to_do.get_file(str(self.filename))
+        # ic(f"reset_table for {self.filename} ({self.current_file}")
 
-        if self.current_file is None or self.current_file.chunks_total == 0:
+        if self.current_file is None or self.current_file.total_chunk_count == 0:
             self.table_size = 0
             return
 
-        chunks = self.current_file.chunks_total
+        chunks = self.current_file.total_chunk_count
 
         self.use_dialog = False
 
@@ -136,18 +139,22 @@ class ChunkModel(QAbstractTableModel):
 
         chunk = self.calculate_chunk(row, column)  # row * self.rows_columns + column
 
-        if role == Qt.ItemDataRole.BackgroundRole:
-            color = QColor("#818a84")
-            if chunk in self.current_file.deduped_chunks:
-                color = QColor("#f5a356")
+        # The order is important. Chunks can be in both transmitted and deduped,
+        # and if that happens, they are actually deduped. Also, they will be in
+        # prepared, so the order to return is first deduped, then transmitted,
+        # then prepared
 
-            if chunk in self.current_file.prepared_chunks:
-                color = QColor("#2575fc")
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if chunk in self.current_file.deduped_chunks:
+                return QColor("#f5a356")
 
             if chunk in self.current_file.transmitted_chunks:
-                color = QColor("#84fab0")
+                return QColor("#84fab0")
 
-            return color
+            if chunk in self.current_file.prepared_chunks:
+                return QColor("#2575fc")
+
+            return QColor("#818a84")  # The default color
 
     def rowCount(self, index: QModelIndex) -> int:
         # Subtract two so that no matter what the way things are, we don't go over
