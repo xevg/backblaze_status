@@ -2,6 +2,47 @@
 
 
 
+## v0.8.0 (2024-02-22)
+
+### Feature
+
+* feat: change re-read logic and change variable names ([`aaa5297`](https://github.com/xevg/backblaze_status/commit/aaa5297363d413738bbf1f5dcebe9ea7b2786943))
+
+* feat: add chunk information ([`7b1c7ea`](https://github.com/xevg/backblaze_status/commit/7b1c7ea2e4a51bb45140b660b11d30896a007d9c))
+
+* feat: add chunk information ([`5f57204`](https://github.com/xevg/backblaze_status/commit/5f57204a10c0c501742f0d805872db93cca73c9f))
+
+* feat: at chunk columns ([`04533d6`](https://github.com/xevg/backblaze_status/commit/04533d643b20e48221100f86560e13672a4ecb38))
+
+### Fix
+
+* fix: change divisor to 1024 ([`b8be445`](https://github.com/xevg/backblaze_status/commit/b8be445ba8ebacb3e0dc603399fee50c9293b12d))
+
+* fix: remove incorrect dedup calculation ([`3846f71`](https://github.com/xevg/backblaze_status/commit/3846f71bbc13e694880915bd508183941905679b))
+
+* fix: add emit ([`0eecfd1`](https://github.com/xevg/backblaze_status/commit/0eecfd1345f714fdd1c8c9f5f9d56e8fa1d23000))
+
+* fix: minor changes ([`1444f5f`](https://github.com/xevg/backblaze_status/commit/1444f5f46fa438fa6acc416cfd9538904da7ca2c))
+
+### Refactor
+
+* refactor: change name of thread ([`c8c9ac5`](https://github.com/xevg/backblaze_status/commit/c8c9ac5b457b83d57d50d958f2abde6359b7d70d))
+
+* refactor: change name of thread ([`68bd786`](https://github.com/xevg/backblaze_status/commit/68bd786eac61b2ae56f829ab22a3fa425ee855cc))
+
+* refactor: change dialog table to model based ([`3c618ac`](https://github.com/xevg/backblaze_status/commit/3c618ac31233428eab3919f9ee329d949e4dd3e5))
+
+* refactor: rename variables ([`d96c592`](https://github.com/xevg/backblaze_status/commit/d96c592436586fd7f6e0b18c5e3fb2fc12a62828))
+
+* refactor: add ic and rename variables ([`e058def`](https://github.com/xevg/backblaze_status/commit/e058defeed835c8bfb88102e4e3edeeb0af00f09))
+
+* refactor: take out whitespace ([`32bba05`](https://github.com/xevg/backblaze_status/commit/32bba0570d393cd02b8b9dc2b16a7eaea134fcc1))
+
+* refactor: change variable names ([`39aef6c`](https://github.com/xevg/backblaze_status/commit/39aef6ccce163d3df8eadf70b47fb1685887ae43))
+
+* refactor: change variable names ([`d2770c1`](https://github.com/xevg/backblaze_status/commit/d2770c15b02e6303417041f2e7c619be7de6d80f))
+
+
 ## v0.7.0 (2024-02-17)
 
 ### Feature
