@@ -1,5 +1,8 @@
-from .progress import ProgressBox
+import threading
+
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, pyqtSlot
+
+from .progress_box import ProgressBox
 
 
 class ProgressBoxWorker(QObject):
@@ -13,6 +16,8 @@ class ProgressBoxWorker(QObject):
 
     @pyqtSlot()
     def run(self):
+        threading.current_thread().name = QThread.currentThread().objectName()
+
         while True:
             values = dict()
             total_size = self.progress_box.total_size
