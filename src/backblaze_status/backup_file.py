@@ -19,28 +19,27 @@ class BackupFile:
     file_size: int
     list_index: int = 0
 
-    timestamp: datetime = field(default=datetime.now())
     completed: bool = False
     is_deduped: bool = False
+    is_deduped_chunks: bool = False
     previous_run: bool = False
     _deduped_bytes: int = 0
     _transmitted_bytes: int = 0
     _total_bytes_processed: int = 0
-    large_file: bool = False
+    is_large_file: bool = False
     _chunks_total: int = 0
-    chunks_prepared: set = field(default_factory=set)
-    chunks_deduped: set = field(default_factory=set)
-    chunks_transmitted: set = field(default_factory=set)
+    _prepared_chunks: set = field(default_factory=set)
+    _deduped_chunks: set = field(default_factory=set)
+    _transmitted_chunks: set = field(default_factory=set)
     _current_chunk: int = 0
     batch: BzBatch = None
     _rate: str = str()
     completed_run: int = 0
 
-    start_time: datetime = datetime.now()
-    end_time: datetime = 0
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
 
     row_color: Optional[QColor] = field(default=None)
-    timestamp_color: Optional[QColor] = field(default=None)
     file_name_color: Optional[QColor] = field(default=None)
     file_size_color: Optional[QColor] = field(default=None)
     start_time_color: Optional[QColor] = field(default=None)
@@ -59,18 +58,16 @@ class BackupFile:
         yield "file_name", self.file_name
         yield "file_size", self.file_size
         yield "completed", self.completed
-        yield "large_file", self.large_file
+        yield "large_file", self.is_large_file
         yield "is_deduped", self.is_deduped
         yield "batch_id", self.batch
 
-        yield "timestamp", self.timestamp
-
-        yield "chunks_total", self.chunks_total
+        yield "total_chunk_count", self.total_chunk_count
         yield "current_chunk", self.current_chunk
 
-        yield "chunks_prepared", self.chunks_prepared
-        yield "chunks_deduped", self.chunks_deduped
-        yield "chunks_transmitted", self.chunks_transmitted
+        yield "chunks_prepared", self._prepared_chunks
+        yield "chunks_deduped", self._deduped_chunks
+        yield "chunks_transmitted", self._transmitted_chunks
 
         yield "deduped_bytes", self.deduped_bytes
         yield "transmitted_bytes", self.transmitted_bytes
@@ -80,45 +77,46 @@ class BackupFile:
 
     def add_prepared(self, chunk_number: int):
         with Lock.DB_LOCK:
-            self.chunks_prepared.add(chunk_number)
+            self._prepared_chunks.add(chunk_number)
             self.current_chunk = chunk_number
 
     def add_deduped(self, chunk_number: int):
         with Lock.DB_LOCK:
-            self.chunks_deduped.add(chunk_number)
+            self._deduped_chunks.add(chunk_number)
             self.current_chunk = chunk_number
 
     def add_transmitted(self, chunk_number: int):
         with Lock.DB_LOCK:
-            self.chunks_transmitted.add(chunk_number)
-            self.current_chunk = chunk_number
+            if chunk_number not in self._deduped_chunks:
+                self._transmitted_chunks.add(chunk_number)
+                self.current_chunk = chunk_number
 
     @property
     def deduped_count(self) -> int:
         with Lock.DB_LOCK:
-            return len(self.chunks_deduped)
+            return len(self._deduped_chunks)
 
     @property
     def max_prepared(self) -> int:
         with Lock.DB_LOCK:
-            if len(self.chunks_prepared) > 0:
-                return max(self.chunks_prepared)
+            if len(self._prepared_chunks) > 0:
+                return max(self._prepared_chunks)
             else:
                 return 0
 
     @property
     def max_deduped(self) -> int:
         with Lock.DB_LOCK:
-            if len(self.chunks_deduped) > 0:
-                return max(self.chunks_deduped)
+            if len(self._deduped_chunks) > 0:
+                return max(self._deduped_chunks)
             else:
                 return 0
 
     @property
     def max_transmitted(self) -> int:
         with Lock.DB_LOCK:
-            if len(self.chunks_transmitted) > 0:
-                return max(self.chunks_transmitted)
+            if len(self._transmitted_chunks) > 0:
+                return max(self._transmitted_chunks)
             else:
                 return 0
 
@@ -126,18 +124,18 @@ class BackupFile:
     def total_chunk_size(self) -> int:
         with Lock.DB_LOCK:
             return (
-                len(self.chunks_transmitted) + len(self.chunks_deduped)
+                len(self._transmitted_chunks) + len(self._deduped_chunks)
             ) * Configuration.default_chunk_size
 
     @property
     def transmitted_chunk_size(self) -> int:
         with Lock.DB_LOCK:
-            return len(self.chunks_transmitted) * Configuration.default_chunk_size
+            return len(self._transmitted_chunks) * Configuration.default_chunk_size
 
     @property
     def total_deduped_size(self) -> int:
         with Lock.DB_LOCK:
-            return len(self.chunks_deduped) * Configuration.default_chunk_size
+            return len(self._deduped_chunks) * Configuration.default_chunk_size
 
     @property
     def current_chunk(self) -> int:
@@ -182,19 +180,19 @@ class BackupFile:
     @property
     def deduped_chunks(self) -> list:
         with Lock.DB_LOCK:
-            chunks = list(self.chunks_deduped)
+            chunks = list(self._deduped_chunks)
             return chunks
 
     @property
     def transmitted_chunks(self) -> list:
         with Lock.DB_LOCK:
-            chunks = list(self.chunks_transmitted)
+            chunks = list(self._transmitted_chunks)
             return chunks
 
     @property
     def prepared_chunks(self) -> list:
         with Lock.DB_LOCK:
-            chunks = list(self.chunks_prepared)
+            chunks = list(self._prepared_chunks)
             return chunks
 
     @property
@@ -208,11 +206,11 @@ class BackupFile:
             self._total_bytes_processed = total_bytes_processed
 
     @property
-    def chunks_total(self) -> int:
+    def total_chunk_count(self) -> int:
         with Lock.DB_LOCK:
             return self._chunks_total
 
-    @chunks_total.setter
-    def chunks_total(self, chunks_total: int):
+    @total_chunk_count.setter
+    def total_chunk_count(self, chunks_total: int):
         with Lock.DB_LOCK:
             self._chunks_total = chunks_total
