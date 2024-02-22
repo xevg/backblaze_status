@@ -142,13 +142,6 @@ class BzPrepare(BzLogFileWatcher):
                 backup_file: BackupFile = self.backup_list.current_file
 
             backup_file.add_prepared(chunk_num)
-
+            self.qt.chunk_model.layoutChanged.emit()
+            # ic(f"chunk layoutChanged in prepare")
             return
-
-            if self.first_pass:
-                if tell < self.file_size:
-                    return
-            time.sleep(0.05)
-            self.backup_status.qt.signals.update_prepare.emit(
-                str(backup_file.file_name), chunk_num
-            )
