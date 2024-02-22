@@ -147,41 +147,45 @@ class BzTransmit(BzLogFileWatcher):
 
             backup_file = self.to_do.get_file(str(_filename))  # type: BackupFile
             backup_file.add_deduped(chunk_number)
+            self.qt.chunk_model.layoutChanged.emit()
+            # ic(f"chunk layoutChanged in bztransmit for dedup")
             backup_file.current_chunk = chunk_number
             backup_file.rate = "bztransmit"
 
-        _dedup_encrypted_search_results = self.duplicate_encrypted.search(_line)
-        if _dedup_encrypted_search_results is not None:
-            chunk = True
-            chunk_number = int(_dedup_encrypted_search_results.group(2), base=16)
-            _filename = Path(_dedup_encrypted_search_results.group(1))
-            _timestamp = _line[0:19]
-            if _timestamp[4] == "-":
-                # The transmit file uses UTC time
-                _datetime = (
-                    datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
-                    .replace(tzinfo=timezone.utc)
-                    .astimezone(tz=None)
-                )
-            else:
-                _timestamp = _line[0:14]
-                _datetime = (
-                    datetime.strptime(_timestamp, "%Y%m%d%H%M%S")
-                    .replace(tzinfo=timezone.utc)
-                    .astimezone(tz=None)
-                )
-
-            if not self.to_do.exists(str(_filename)):
-                self.to_do.add_file(
-                    Path(_filename),
-                    is_chunk=chunk,
-                    timestamp=_datetime,
-                )  # add_file locks the backup list itself
-
-            backup_file = self.to_do.get_file(str(_filename))  # type: BackupFile
-            backup_file.add_deduped(chunk_number)
-            backup_file.current_chunk = chunk_number
-            backup_file.rate = "bztransmit"
+        # _dedup_encrypted_search_results = self.duplicate_encrypted.search(_line)
+        # if _dedup_encrypted_search_results is not None:
+        #     chunk = True
+        #     chunk_number = int(_dedup_encrypted_search_results.group(2), base=16)
+        #     _filename = Path(_dedup_encrypted_search_results.group(1))
+        #     _timestamp = _line[0:19]
+        #     if _timestamp[4] == "-":
+        #         # The transmit file uses UTC time
+        #         _datetime = (
+        #             datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
+        #             .replace(tzinfo=timezone.utc)
+        #             .astimezone(tz=None)
+        #         )
+        #     else:
+        #         _timestamp = _line[0:14]
+        #         _datetime = (
+        #             datetime.strptime(_timestamp, "%Y%m%d%H%M%S")
+        #             .replace(tzinfo=timezone.utc)
+        #             .astimezone(tz=None)
+        #         )
+        #
+        #     if not self.to_do.exists(str(_filename)):
+        #         self.to_do.add_file(
+        #             Path(_filename),
+        #             is_chunk=chunk,
+        #             timestamp=_datetime,
+        #         )  # add_file locks the backup list itself
+        #
+        #     backup_file = self.to_do.get_file(str(_filename))  # type: BackupFile
+        #     backup_file.add_deduped(chunk_number)
+        #     self.qt.chunk_model.layoutChanged.emit()
+        #     # ic(f"chunk layoutChanged in bztransmit for transmit")
+        #     backup_file.current_chunk = chunk_number
+        #     backup_file.rate = "bztransmit"
 
         _new_to_do_file_search_results = self.new_to_do_file_re.search(_line)
         if _new_to_do_file_search_results is not None:
