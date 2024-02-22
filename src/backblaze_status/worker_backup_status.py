@@ -1,5 +1,6 @@
 from .main_backup_status import BackupStatus
-from PyQt6.QtCore import QObject, pyqtSlot
+from PyQt6.QtCore import QObject, pyqtSlot, QThread
+import threading
 
 
 class BackupStatusWorker(QObject):
@@ -10,5 +11,5 @@ class BackupStatusWorker(QObject):
 
     @pyqtSlot()
     def run(self):
-        pass
+        threading.current_thread().name = QThread.currentThread().objectName()
         self.backup_status.run()
