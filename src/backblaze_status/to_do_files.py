@@ -139,11 +139,6 @@ class ToDoFiles:
                             continue
 
                         todo_file_size = int(todo_fields[4])
-                        if read_existing_file:
-                            # If I am re-reading the existing file, then don't overwrite
-                            # files that already exist
-                            if self._to_do_file_list[str(todo_filename)]:
-                                continue
 
                         backup = BackupFile(todo_filename, todo_file_size)
                         if todo_file_size > Configuration.default_chunk_size:
