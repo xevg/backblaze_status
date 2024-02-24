@@ -268,9 +268,10 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
 
         if self._batch:
             backup_file.batch = self._batch
-        self._bytes += _bytes
-        backup_file.timestamp = _datetime
+            backup_file.start_time = datetime.now()
+            self.backup_list.mark_completed(str(backup_file.file_name))
 
+        self._bytes += _bytes
         return
 
     def read_file(self) -> None:
