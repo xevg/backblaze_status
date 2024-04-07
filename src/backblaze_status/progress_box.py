@@ -1,6 +1,6 @@
-import threading
-import time
 from datetime import datetime, timedelta
+
+from PyQt6.QtCore import QTimer, pyqtSignal, pyqtSlot, QReadWriteLock
 
 from .configuration import Configuration
 from .locks import lock, Lock
@@ -49,21 +49,25 @@ class ProgressBox:
         self._size_percentage = 0
         self._chunks_percentage = 0
 
+        self.lock: QReadWriteLock = QReadWriteLock(
+            recursionMode=QReadWriteLock.RecursionMode.Recursive
+        )
+
         self.last_calculated: datetime = datetime.now()
 
-        timer_thread = threading.Thread(
-            target=self.timer, name="ProgressUpdateTimer", daemon=True
+        self.calculate_timer_thread = QTimer()
+        self.calculate_timer_thread.timeout.connect(
+            lambda: self.calculate()
+            if (datetime.now() - self.last_calculated).total_seconds() > 15
+            else None
         )
-        timer_thread.name = "ProgressUpdateTimer"
-        timer_thread.start()
+        self.calculate_timer_thread.start(15000)  # Fire every 15 seconds
 
-    def timer(self) -> None:
-        while True:
-            time.sleep(15)
-            if (datetime.now() - self.last_calculated).total_seconds() > 15:
-                self.calculate()
+    @pyqtSlot()
+    def calculate_timer(self):
+        if (datetime.now() - self.last_calculated).total_seconds() > 15:
+            self.calculate()
 
-    @lock(Lock.DB_LOCK)
     def calculate(self):
         self.last_calculated = datetime.now()
         to_do: ToDoFiles = self._backup_status.to_do
