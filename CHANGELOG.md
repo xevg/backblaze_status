@@ -2,6 +2,17 @@
 
 
 
+## v0.8.1 (2024-04-07)
+
+### Fix
+
+- take out unnecessary checks
+- add mark as completed
+
+### Refactor
+
+- use QTimer
+
 ## v0.8.0 (2024-02-22)
 
 ### Feature

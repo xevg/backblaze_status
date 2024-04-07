@@ -11,6 +11,8 @@ class Signals(QObject):
     update_progress_bar = pyqtSignal(dict)
     update_stats_box = pyqtSignal(str)
 
+    calculate_progress = pyqtSignal()
+
     # Manage interval timer
 
     interval_timer = pyqtSignal(int)
@@ -22,6 +24,11 @@ class Signals(QObject):
     start_new_file = pyqtSignal(str)
     files_updated = pyqtSignal()
 
+    # To Do Triggers
+
+    add_file = pyqtSignal(str, bool)
+    mark_completed = pyqtSignal(str)
+
     # Modes
 
     preparing = pyqtSignal()
@@ -29,13 +36,3 @@ class Signals(QObject):
 
     # Backup Running
     backup_running = pyqtSignal(bool)
-
-    # update_data_table_last_row = pyqtSignal(list, name="update_data_table_last_row")
-    # update_log = pyqtSignal(str)
-    # update_disk_color = pyqtSignal(int, "PyQt_PyObject")
-    # add_pre_data_row = pyqtSignal(list)
-    # update_cell = pyqtSignal(int, int, "PyQt_PyObject", "PyQt_PyObject")
-    # add_data_row = pyqtSignal(list)
-    # update_disk_table = pyqtSignal()
-    # completed_file = pyqtSignal(str)
-    # new_large_file = pyqtSignal(str)

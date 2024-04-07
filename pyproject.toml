@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "backblaze_status"
-version = "0.8.0"
+version = "0.8.1"
 description = "Looking at the state of the Backblaze backup"
 authors = ["Xev Gittler"]
 license = "MIT"
@@ -45,6 +45,13 @@ patch_without_tag = true                    # patch release by default
 [tool.semantic_release.remote.token]
 env = "GH_TOKEN"
 
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "v$version"
+version_scheme = "semver"
+version_provider = "poetry"
+update_changelog_on_bump = true
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"

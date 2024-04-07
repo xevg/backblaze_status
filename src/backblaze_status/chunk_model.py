@@ -2,7 +2,14 @@ import math
 from threading import Lock
 from typing import Any
 from datetime import datetime
-from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex, pyqtSlot, QTimer
+from PyQt6.QtCore import (
+    QAbstractTableModel,
+    Qt,
+    QModelIndex,
+    pyqtSlot,
+    QTimer,
+    QReadWriteLock,
+)
 from PyQt6.QtGui import QColor
 from enum import IntEnum
 
@@ -31,7 +38,7 @@ class ChunkModel(QAbstractTableModel):
         from .to_do_files import ToDoFiles
 
         super(ChunkModel, self).__init__()
-        self.qt: QTBackupStatus = qt
+        self.backup_status: QTBackupStatus = qt
 
         self._file_name: str | None = None
         self.current_file: BackupFile | None = None
@@ -45,7 +52,9 @@ class ChunkModel(QAbstractTableModel):
 
         self.table_size = 0
 
-        self.lock: Lock = Lock()
+        self.lock: QReadWriteLock = QReadWriteLock(
+            recursionMode=QReadWriteLock.RecursionMode.Recursive
+        )
 
         # self.qt.signals.new_large_file.connect(self.set_filename)
 
@@ -60,10 +69,6 @@ class ChunkModel(QAbstractTableModel):
         self.reset_table()
         self.layoutChanged.emit()
 
-    @pyqtSlot(str)
-    def set_filename(self, filename: str):
-        self.filename = filename
-
     def calculate_chunk(self, row: int, column: int) -> int:
         cell_size = self.table_size * self.table_size
         multiplier = self.current_file.total_chunk_count / cell_size
@@ -73,13 +78,13 @@ class ChunkModel(QAbstractTableModel):
 
     def reset_table(self):
         try:
-            self.lock.acquire()
+            self.lock.lockForWrite()
             self._reset_table()
         finally:
-            self.lock.release()
+            self.lock.unlock()
 
     def _reset_table(self):
-        to_do: ToDoFiles = self.qt.backup_status.to_do
+        to_do: ToDoFiles = self.backup_status.to_do
         if to_do is None:
             return
 
@@ -106,9 +111,8 @@ class ChunkModel(QAbstractTableModel):
             self.table_size = self.TableSize.X_Large
 
         # Hard coding it
-
-        self.use_dialog = False
-        self.table_size = self.TableSize.Medium
+        # self.use_dialog = False
+        # self.table_size = self.TableSize.Medium
 
         pixel_size = int(self.TableSize.X_Large / self.table_size)
         max_dimension = (self.table_size * pixel_size) + 5  # 5 for padding
@@ -117,19 +121,19 @@ class ChunkModel(QAbstractTableModel):
         if self.use_dialog:
             # self.qt.chunk_dialog_table.setMaximumSize(max_dimension, max_dimension)
             for spot in range(self.table_size):
-                self.qt.chunk_dialog_table.setColumnWidth(spot, pixel_size)
-                self.qt.chunk_dialog_table.setRowHeight(spot, pixel_size)
+                self.backup_status.chunk_dialog_table.setColumnWidth(spot, pixel_size)
+                self.backup_status.chunk_dialog_table.setRowHeight(spot, pixel_size)
         else:
             # self.qt.chunk_box_table.setMaximumSize(max_dimension, max_dimension)
             for spot in range(self.table_size):
-                self.qt.chunk_box_table.setColumnWidth(spot, pixel_size)
-                self.qt.chunk_box_table.setRowHeight(spot, pixel_size)
+                self.backup_status.chunk_box_table.setColumnWidth(spot, pixel_size)
+                self.backup_status.chunk_box_table.setRowHeight(spot, pixel_size)
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         row = index.row()
         column = index.column()
 
-        to_do: ToDoFiles = self.qt.backup_status.to_do
+        to_do: ToDoFiles = self.backup_status.to_do
         if to_do is None:
             return
 

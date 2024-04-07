@@ -1,12 +1,13 @@
 import os
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from icecream import ic
 
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QTimer, QReadWriteLock, QObject, pyqtSignal, pyqtSlot, QThread
 
 from .backup_file import BackupFile
 from .backup_file_list import BackupFileList
@@ -17,82 +18,100 @@ from .locks import Lock
 from .utils import MultiLogger, file_size_string
 
 
+def debug_print(message: str):
+    thread_name = threading.current_thread().name
+    date = f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <{thread_name}>'
+
+    print(f"{date} {message}")
+
+
 class NotFound(Exception):
     pass
 
 
-@dataclass
-class ToDoFiles:
+class ToDoFiles(QObject):
     """
     Class to store the list and status of To Do files
     """
 
-    # An instance of the QTBackupStatus
-    qt: "QTBackupStatus" = field(default=None, init=True)
+    # Signals
 
-    # These two hold the list of to do files. The _file_list is a list in order,
-    # and the _file_dict contains a dictionary of the files by file_name. The
-    # BackupFile class has a pointer to the list, so that it can be retrieved that
-    # way as well.
-
-    _to_do_file_list: BackupFileList = field(default_factory=BackupFileList, init=False)
-
-    # The _completed_files class contains the list of completed files
-    _completed_file_list: BackupFileList = field(
-        default_factory=BackupFileList, init=False
-    )
-
-    # Storage for the modification time of the current to do file
-    _file_modification_time: float = field(default=0.0, init=False)
-
-    # Flag for if the backup is currently running
-    _backup_running: bool = field(default=False, init=False)
-
-    # The current file that is being backed up
-    _current_file: BackupFile = field(default=None, init=False)
-
-    # The current run
-    _current_run: int = 1
-
-    # Storage for the current to_do file
-    _to_do_file_name: str = field(default_factory=str, init=False)
-
-    # The first file I process off the to do list. This is so that I can accurately
-    # assess the rate
-
-    _starting_file: Optional[BackupFile] = field(default=None, init=False)
-    _starting_index: int = 0
-
-    # To save processing time, this is a cache for values, so they don't need to be
-    # recalculated each time
-    # cache: dict = field(default_factory=dict, init=False)
+    signal_mark_completed = pyqtSignal(str)
+    signal_add_file = pyqtSignal(str, bool)
 
     # The directory where the to_do files live
-    BZ_DIR: str = field(
-        default="/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/", init=False
-    )
+    BZ_DIR: str = "/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/"
 
-    def __post_init__(self):
+    def __init__(self, backup_status):
+        from .qt_backup_status import QTBackupStatus
+
+        super(ToDoFiles, self).__init__()
+
         # Set up the logger and debugging
         self._multi_log = MultiLogger("ToDoFiles", terminal=True)
         self._module_name = self.__class__.__name__
         self._multi_log.log("Creating ToDoFiles")
         self.debug = DevDebug()
 
-        # if self.qt:
-        #     self.qt.signals.files_updated.connect(lambda: self.cache.clear())
+        # An instance of the QTBackupStatus
+        self.backup_status: "QTBackupStatus" = backup_status
+
+        # Lock object
+        self.lock: QReadWriteLock = QReadWriteLock(
+            recursionMode=QReadWriteLock.RecursionMode.Recursive
+        )
+
+        # These two hold the list of to do files. The _file_list is a list in order,
+        # and the _file_dict contains a dictionary of the files by file_name. The
+        # BackupFile class has a pointer to the list, so that it can be retrieved that
+        # way as well.
+
+        self._to_do_file_list: BackupFileList = BackupFileList()
+
+        # The _completed_files class contains the list of completed files
+        self._completed_file_list: BackupFileList = BackupFileList()
+
+        # Storage for the modification time of the current to do file
+        self._file_modification_time: float = 0.0
+
+        # Flag for if the backup is currently running
+        self._backup_running: bool = False
+
+        # The current file that is being backed up
+        self._current_file: Optional[BackupFile] = None
+
+        # The current run
+        self._current_run: int = 1
+
+        # Storage for the current to_do file
+        self._to_do_file_name: str = ""
+
+        # The first file I process off the to do list. This is so that I can accurately
+        # assess the rate
+
+        self._starting_file: Optional[BackupFile] = None
+        self._starting_index: int = 0
+
+        self._reread_file_timer: Optional[QTimer] = None
+
+    def run(self):
+        threading.current_thread().name = QThread.currentThread().objectName()
+
+        # Setup signals
+
+        self.signal_add_file.connect(self._add_file)
+        self.signal_mark_completed.connect(self._mark_completed)
 
         # Do the initial read of the to_do file
         self._read()
 
         # Start a thread that checks to see if the to_do file has changed, and if it
         # has, re-read it
-        self._reread_file_thread = threading.Thread(
-            target=self.reread_to_do_list,
-            daemon=True,
-            name="reread_to_do_list",
-        )
-        self._reread_file_thread.start()
+        self._reread_file_timer = QTimer()
+        self._reread_file_timer.timeout.connect(self.reread_to_do_list)
+        self._reread_file_timer.start(60000)  # Fire every 60 seconds
+
+        self.backup_status.signals.to_do_available.emit()
 
     def __len__(self) -> int:
         return len(self._to_do_file_list.file_list)
@@ -159,10 +178,9 @@ class ToDoFiles:
                         f"Read {count:,} lines from To Do file"
                         f" {self._to_do_file_name}"
                     )
-                if self.qt is not None:
-                    self.qt.signals.backup_running.emit(True)
-                    self.qt.signals.files_updated.emit()
-                    self.qt.result_data.layoutChanged.emit()
+                self.backup_status.signals.backup_running.emit(True)
+                self.backup_status.signals.files_updated.emit()
+                self.backup_status.result_data.layoutChanged.emit()
             except:
                 pass
 
@@ -170,42 +188,39 @@ class ToDoFiles:
         """
         Checks to see if there is a new to_do file, and if there is, reread it
         """
-        while True:
-            time.sleep(60.0)  # Check the file every minute
+        self._to_do_file_name = self.get_to_do_file()
+        if not self.backup_running and self._to_do_file_name is not None:
+            # If the backup is not running already, and there is a new to_do
+            # file, then read it after incrementing the run number
+            self._current_run += 1
+            self._read()
+            return
 
-            self._to_do_file_name = self.get_to_do_file()
-            if not self.backup_running and self._to_do_file_name is not None:
-                # If the backup is not running already, and there is a new to_do
-                # file, then read it after incrementing the run number
-                self._current_run += 1
-                self._read()
-                continue
+        if not self.backup_running and self._to_do_file_name is None:
+            self._multi_log.log(
+                f"Backup not running. Waiting for 1 minute and trying again ..."
+            )
+            return
 
-            if not self.backup_running and self._to_do_file_name is None:
-                self._multi_log.log(
-                    f"Backup not running. Waiting for 1 minute and trying again ..."
-                )
-                continue
+        # If the backup is running and the to_do file name is not None, then see
+        # if we need to re-read the file because there is new data in it
+        if self.backup_running and self._to_do_file_name is not None:
+            try:
+                file = Path(self._to_do_file_name)
+                stat = file.stat()
+            except FileNotFoundError:
+                # If there is no file, then the backup is complete, then mark it
+                # as complete
+                if self.backup_running:
+                    self._mark_backup_not_running()
+                return
 
-            # If the backup is running and the to_do file name is not None, then see
-            # if we need to re-read the file because there is new data in it
-            if self.backup_running and self._to_do_file_name is not None:
-                try:
-                    file = Path(self._to_do_file_name)
-                    stat = file.stat()
-                except FileNotFoundError:
-                    # If there is no file, then the backup is complete, then mark it
-                    # as complete
-                    if self.backup_running:
-                        self.mark_backup_not_running()
-                    continue
+            # Check to see if the modification time has changed. If it has,
+            # then reread the file.
 
-                # Check to see if the modification time has changed. If it has,
-                # then reread the file.
-
-                if self._file_modification_time != stat.st_mtime:
-                    self._multi_log.log("To Do file changed, rereading")
-                    self._read(read_existing_file=True)
+            if self._file_modification_time != stat.st_mtime:
+                self._multi_log.log("To Do file changed, rereading")
+                self._read(read_existing_file=True)
 
     def _mark_backup_not_running(self):
         self._multi_log.log("Backup Complete")
@@ -214,9 +229,8 @@ class ToDoFiles:
         self.current_file = None
         self._starting_file = None
         self._starting_index = 0
-        if self.qt:
-            self.qt.signals.backup_running.emit(False)
-            self.qt.signals.files_updated.emit()
+        self.backup_status.signals.backup_running.emit(False)
+        self.backup_status.signals.files_updated.emit()
 
     def get_to_do_file(self) -> str:
         """
@@ -254,8 +268,9 @@ class ToDoFiles:
         """
         Set the file that is currently being backed up
         """
-        with Lock.DB_LOCK:
-            self._current_file = value
+        self.lock.lockForWrite()
+        self._current_file = value
+        self.lock.unlock()
 
     @property
     def to_do_file_list(self) -> BackupFileList:  #  list[BackupFile]:
@@ -269,7 +284,10 @@ class ToDoFiles:
         """
         Get the backup file with the given filename
         """
-        return self._to_do_file_list.get(filename)
+        self.lock.lockForRead()
+        result = self._to_do_file_list.get(filename)
+        self.lock.unlock()
+        return result
 
     def exists(self, filename: str) -> bool:
         """
@@ -277,7 +295,12 @@ class ToDoFiles:
         :param filename:
         :return:
         """
-        return filename in self._to_do_file_list.file_dict
+
+        self.lock.lockForRead()
+        result = filename in self._to_do_file_list.file_dict
+        self.lock.unlock()
+
+        return result
 
     # No one is using this function
     # def get_index(self, filename) -> int:
@@ -287,12 +310,19 @@ class ToDoFiles:
     #         raise NotFound
 
     def mark_completed(self, filename: str) -> None:
+        self.signal_mark_completed.emit(filename)
+        debug_print(f"emitted mark_completed({filename})")
+
+    @pyqtSlot(str)
+    def _mark_completed(self, filename: str) -> None:
         """
         Mark a file as completed
 
         :param filename:
         :return:
         """
+        debug_print(f"received mark_completed({filename})")
+
         completed_file: BackupFile = self.get_file(filename)
         if completed_file is None:
             raise CompletedFileNotFound
@@ -301,86 +331,76 @@ class ToDoFiles:
             self._starting_file = completed_file
             self._starting_index = self._to_do_file_list.file_list.index(completed_file)
 
-        with Lock.DB_LOCK:
-            # When a chunk is deduped during transmission, it goes into both
-            # transmitted and deduped. Remove it from transmitted.
-            completed_file._transmitted_chunks = (
-                completed_file._transmitted_chunks - completed_file._deduped_chunks
-            )
-            completed_file.completed = True
-            completed_file.end_time = datetime.now()
-            completed_file.completed_run = self._current_run
+        self.lock.lockForWrite()
 
-            if completed_file.start_time is not None:
-                completion_time = (
-                    completed_file.end_time - completed_file.start_time
-                ).seconds
-                if completion_time == 0:
-                    completed_file.rate = ""
-                else:
-                    completed_file.rate = (
-                        f"{file_size_string(completed_file.file_size / completion_time)}"
-                        f" / sec"
-                    )
+        completed_file.completed = True
+        completed_file.end_time = datetime.now()
+        completed_file.completed_run = self._current_run
 
-            if completed_file.is_large_file:
-                chunk_duplicate_percentage = (
-                    completed_file.deduped_count / completed_file.total_chunk_count
+        if completed_file.start_time is not None:
+            completion_time = (
+                completed_file.end_time - completed_file.start_time
+            ).seconds
+            if completion_time == 0:
+                completed_file.rate = ""
+            else:
+                completed_file.rate = (
+                    f"{file_size_string(completed_file.file_size / completion_time)}"
+                    f" / sec"
                 )
-                if chunk_duplicate_percentage > 0.75:
-                    completed_file.is_deduped_chunks = True
 
-            # Move the completed items to the completed file list
+        if completed_file.is_large_file:
+            chunk_duplicate_percentage = (
+                completed_file.deduped_count / completed_file.total_chunk_count
+            )
+            if chunk_duplicate_percentage > 0.75:
+                completed_file.is_deduped_chunks = True
 
-            self._completed_file_list.append(completed_file)
-            # self._to_do_file_list.remove(completed_file)
+        # Put completed items on the completed file list
 
-            # Define the color based on whether it is deduped or not
-            # TODO: Should this color selection move to the model?
-            if completed_file.is_deduped:
-                completed_file.row_color = QColor("orange")
+        self._completed_file_list.append(completed_file)
+        self.lock.unlock()
 
-        if self.qt is not None:
-            self.qt.progress_box.calculate()
-            self.qt.signals.files_updated.emit()
-            self.qt.reposition_table()
-            # I don't think I need this emit
-            # self.qt.result_data.layoutChanged.emit()
+        self.backup_status.signals.calculate_progress.emit()
+        self.backup_status.signals.files_updated.emit()
+        self.backup_status.reposition_table()
 
-    def add_file(
+    def add_file(self, filename: str, is_chunk: bool = False):
+        self.signal_add_file.emit(filename, is_chunk)
+
+    @pyqtSlot(str, bool)
+    def _add_file(
         self,
-        filename: Path,
+        filename: str,
         is_chunk: bool = False,
-        timestamp: datetime = datetime.now(),
     ):
         """
         Add a file that isn't on the to_do list
         """
-        if not self.exists(str(filename)):
-            # invalidate the cache
-            # self.cache = dict()
+        if not self.exists(filename):
+            filename_path = Path(filename)
+            self.lock.lockForWrite()
+            try:
+                _stat = filename_path.stat()
+                file_size = _stat.st_size
+            except:
+                file_size = 0
 
-            with Lock.DB_LOCK:
-                try:
-                    _stat = filename.stat()
-                    file_size = _stat.st_size
-                except:
-                    file_size = 0
+            backup_file = BackupFile(
+                filename_path,
+                file_size,
+            )
 
-                backup_file = BackupFile(
-                    filename,
-                    file_size,
+            # file_size > self.default_chunk_size:
+            # this is the size of the backblaze chunks
+            if is_chunk:
+                backup_file.total_chunk_count = int(
+                    file_size / Configuration.default_chunk_size
                 )
+                backup_file.is_large_file = True
 
-                # file_size > self.default_chunk_size:
-                # this is the size of the backblaze chunks
-                if is_chunk:
-                    backup_file.total_chunk_count = int(
-                        file_size / Configuration.default_chunk_size
-                    )
-                    backup_file.is_large_file = True
-
-                self._to_do_file_list.append(backup_file)
+            self._to_do_file_list.append(backup_file)
+            self.lock.unlock()
 
     @property
     def completed_files(self) -> list:

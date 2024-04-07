@@ -2,24 +2,20 @@ import re
 import select
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
 from io import TextIOWrapper
 from pathlib import Path
 
 from .backup_file import BackupFile
-from .bz_log_file_watcher import BzLogFileWatcher
-from .main_backup_status import BackupStatus
+from .dev_debug import DevDebug
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
-from .utils import MultiLogger, get_lock, return_lock
-from .dev_debug import DevDebug
+from .utils import MultiLogger
 
 
 @dataclass
-class BzPrepare(BzLogFileWatcher):
-    backup_status: BackupStatus
-    qt: QTBackupStatus | None = field(default=None)
-    backup_list: ToDoFiles | None = field(default=None, init=False)
+class BzPrepare:
+    backup_status: QTBackupStatus
+    to_do_files: ToDoFiles | None = field(default=None, init=False)
     BZ_LOG_DIR: str = field(
         default="/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/bzcurrentlargefile",
         init=False,
@@ -29,10 +25,10 @@ class BzPrepare(BzLogFileWatcher):
     first_pass: bool = field(default=True, init=False)
 
     def __post_init__(self):
-        self._multi_log = MultiLogger("BzPrepare", terminal=True, qt=self.qt)
+        self._multi_log = MultiLogger("BzPrepare", terminal=True, qt=self.backup_status)
         self._module_name = self.__class__.__name__
         self._multi_log.log("Starting BzPrepare")
-        self.debug: DevDebug = self.qt.debug
+        self.debug: DevDebug = self.backup_status.debug
 
         # Compile the chunk search regular expression
         self.chunk_search_re = re.compile(r"seq([0-9a-f]+).dat")
@@ -80,14 +76,6 @@ class BzPrepare(BzLogFileWatcher):
             yield _line
 
     def read_file(self) -> None:
-        while True:
-            if not self.backup_list:
-                # Give the main program time to start up and scan the disks
-                time.sleep(10)
-                self.backup_list = self.backup_status.to_do
-            else:
-                break
-
         _log_file = self._get_latest_logfile_name()
         while True:
             if not _log_file.exists():
@@ -101,14 +89,14 @@ class BzPrepare(BzLogFileWatcher):
 
                 # self.debug.print("bz_prepare.starting", f"Starting to read
                 # {_log_file}")
-                backup_file: BackupFile = self.backup_list.current_file
+                backup_file: BackupFile = self.to_do_files.current_file
                 while backup_file is None:
                     time.sleep(1)
-                    backup_file: BackupFile = self.backup_list.current_file
+                    backup_file: BackupFile = self.to_do_files.current_file
 
                 while str(backup_file.file_name) == self.previous_file:
                     time.sleep(1)
-                    backup_file: BackupFile = self.backup_list.current_file
+                    backup_file: BackupFile = self.to_do_files.current_file
 
                 self.previous_file = str(backup_file.file_name)
                 # TODO: Do soemthing to determine that the current file is not the previous file, and if it
@@ -136,12 +124,12 @@ class BzPrepare(BzLogFileWatcher):
             # TODO: Do soemthing to determine that the current file is not the previous file, and if it
             #  is, then wait for it to be the current?
 
-            backup_file: BackupFile = self.backup_list.current_file
+            backup_file: BackupFile = self.to_do_files.current_file
             while backup_file is None:
                 time.sleep(1)
-                backup_file: BackupFile = self.backup_list.current_file
+                backup_file: BackupFile = self.to_do_files.current_file
 
             backup_file.add_prepared(chunk_num)
-            self.qt.chunk_model.layoutChanged.emit()
+            self.backup_status.chunk_model.layoutChanged.emit()
             # ic(f"chunk layoutChanged in prepare")
             return

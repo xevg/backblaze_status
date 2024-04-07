@@ -17,14 +17,14 @@ from rich.pretty import pprint
 
 
 @dataclass
-class BzLastFilesTransmitted(BzLogFileWatcher):
+class BzLastFilesTransmitted:
     """
     Continuously scan the lastfiletransmitted file to get information about the state of the backup
     """
 
-    backup_status: BackupStatus
-    qt: QTBackupStatus | None = field(default=None)
-    backup_list: ToDoFiles | None = field(default=None, init=False)
+    backup_status: QTBackupStatus
+
+    to_do_files: ToDoFiles | None = field(default=None, init=False)
     _total_lines: int = field(default=0, init=False)
     _dedups: int = field(default=0, init=False)
     _blank_lines: int = field(default=0, init=False)
@@ -44,13 +44,14 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
 
     def __post_init__(self):
         self._multi_log = MultiLogger(
-            "BzLastFilesTransmitted", terminal=True, qt=self.qt
+            "BzLastFilesTransmitted", terminal=True, qt=self.backup_status
         )
         self._module_name = self.__class__.__name__
         self._multi_log.log("Starting BzLastFilesTransmitted")
 
         self.go_to_end = True
-        self.debug = self.qt.debug
+        self.debug = self.backup_status.debug
+        self.signals = self.backup_status.signals
 
     def _get_latest_logfile_name(self) -> Path:
         """
@@ -197,35 +198,33 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
             return
 
         # If the file we are backing up is not on the to_do list, then we add it
-        if not self.backup_list.exists(_filename):
+        if not self.to_do_files.exists(_filename):
             print(f"Unexpected file {_filename} being backed up")
-            self.backup_list.add_file(
-                Path(_filename),
+            self.to_do_files.add_file(
+                _filename,
                 is_chunk=chunk,
-                timestamp=_datetime,
             )  # No lock here because add_file locks
 
-            self.backup_list.current_file = self.backup_list.get_file(_filename)
+            self.to_do_files.current_file = self.to_do_files.get_file(_filename)
 
         if self._previous_filename is None:
             self._previous_filename = _filename
 
             # We have started transmitting, so set the marker for that
-            self.qt.signals.transmitting.emit(_filename)
+            self.signals.transmitting.emit(_filename)
 
         elif self._previous_filename != _filename:
-            # First complete the previous filename
-            # self.qt.signals.completed_file.emit(self._previous_filename)
+            # The filename has changed, and we are still transmitting
 
             # Now set the new filename tp the previous filename
             self._previous_filename = _filename
 
             # We have started transmitting, so set the marker for that
-            self.qt.signals.transmitting.emit(_filename)
+            self.signals.transmitting.emit(_filename)
 
         # Get the file off of the to_list. I have to lock it so no other thread
         # reads/writes from it while I do
-        backup_file = self.backup_list.get_file(str(_filename))  # type: BackupFile
+        backup_file = self.to_do_files.get_file(str(_filename))  # type: BackupFile
         if backup_file is None:
             return
 
@@ -239,7 +238,8 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
             if dedup:
                 if chunk:
                     backup_file.add_deduped(_chunk_number)
-                    self.qt.chunk_model.layoutChanged.emit()
+                    # Since we've updated the backup_file, let the chunk_model know
+                    self.backup_status.chunk_model.layoutChanged.emit()
                     # ic(f"chunk layoutChanged in lastfilestransmitted for dedup")
 
                 else:
@@ -253,7 +253,8 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
             else:
                 if chunk:
                     backup_file.add_transmitted(_chunk_number)
-                    self.qt.chunk_model.layoutChanged.emit()
+                    # Since we've updated the backup_file, let the chunk_model know
+                    self.backup_status.chunk_model.layoutChanged.emit()
                     # ic(f"chunk layoutChanged in lastfilestransmitted for transmitted")
 
                 else:
@@ -269,20 +270,12 @@ class BzLastFilesTransmitted(BzLogFileWatcher):
         if self._batch:
             backup_file.batch = self._batch
             backup_file.start_time = datetime.now()
-            self.backup_list.mark_completed(str(backup_file.file_name))
+            self.to_do_files.mark_completed(str(backup_file.file_name))
 
         self._bytes += _bytes
         return
 
     def read_file(self) -> None:
-        while True:
-            if not self.backup_list:
-                # Give the main program time to start up and scan the disks
-                time.sleep(10)
-                self.backup_list = self.backup_status.to_do
-            else:
-                break
-
         _log_file = self._get_latest_logfile_name()
         pre_stat = _log_file.stat()
         self._file_size = pre_stat.st_size

@@ -51,11 +51,11 @@ class BzDataTableModel(QAbstractTableModel):
         RowType.PREVIOUS_RUN: QColor("black"),
     }
 
-    def __init__(self, qt):
+    def __init__(self, backup_status):
         from .qt_backup_status import QTBackupStatus
 
         super(BzDataTableModel, self).__init__()
-        self.qt: QTBackupStatus = qt
+        self.backup_status: QTBackupStatus = backup_status
         self.display_cache: list[BackupFile] = []
 
         self.lock: threading.Lock = threading.Lock()
@@ -63,18 +63,17 @@ class BzDataTableModel(QAbstractTableModel):
         self.in_progress_file: Optional[BackupFile] = None
 
         # Start a timer to update the interval of the in_progress file
-        # self.interval_timer = threading.Timer(1, self.update_interval)
         self.interval_timer = QTimer()
         self.interval_timer.timeout.connect(self.update_interval)
-        self.interval_timer.start(1000)
+        self.interval_timer.start(1000)  # 1 second
 
         self.fixed_font = QFont(".SF NS Mono")
 
-        self.to_do: ToDoFiles = self.qt.backup_status.to_do
+        self.to_do: ToDoFiles = self.backup_status.to_do
         if self.to_do is None:
             # If to_do isn't available yet, get a signal when it is
-            self.qt.signals.to_do_available.connect(self.to_do_loaded)
-            self.qt.signals.backup_running.connect(self.backup_state_changed)
+            self.backup_status.signals.to_do_available.connect(self.to_do_loaded)
+            self.backup_status.signals.backup_running.connect(self.backup_state_changed)
 
             self.completed_files_list: Optional[BackupFileList] = None
             self.to_do_files_list: Optional[BackupFileList] = None
@@ -84,8 +83,7 @@ class BzDataTableModel(QAbstractTableModel):
 
             self.update_display_cache()
 
-        if self.qt is not None:
-            self.qt.signals.files_updated.connect(self.update_display_cache)
+        self.backup_status.signals.files_updated.connect(self.update_display_cache)
 
         self.column_names = [
             "Time",
@@ -109,7 +107,7 @@ class BzDataTableModel(QAbstractTableModel):
 
     @pyqtSlot()
     def to_do_loaded(self):
-        self.to_do: ToDoFiles = self.qt.backup_status.to_do
+        self.to_do: ToDoFiles = self.backup_status.to_do
         self.completed_files_list: BackupFileList = self.to_do.completed_file_list
         self.to_do_files_list: BackupFileList = self.to_do.completed_file_list
         self.update_display_cache()
@@ -142,6 +140,9 @@ class BzDataTableModel(QAbstractTableModel):
                 return
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+        if self.to_do is None:
+            return
+
         row = index.row()
         column = index.column()
         if self.row_type(row) == RowType.CURRENT:
@@ -292,7 +293,7 @@ class BzDataTableModel(QAbstractTableModel):
 
         self.display_cache = completed_file_list + new_file_list + to_do_file_list
         self.layoutChanged.emit()
-        self.qt.reposition_table()
+        self.backup_status.reposition_table()
 
     def row_type(self, row: int, row_data: Optional[BackupFile] = None) -> RowType:
         if self.to_do is None:

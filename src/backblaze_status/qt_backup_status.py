@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import os
 import sys
-import time
 from datetime import datetime
 from enum import IntEnum
-from icecream import ic, install
+from typing import Optional
+import threading
 
 from PyQt6.QtCore import (
     pyqtSlot,
@@ -14,45 +14,61 @@ from PyQt6.QtCore import (
     QThread,
     QTimer,
 )
-from PyQt6.QtGui import QColor, QShortcut, QIcon, QPixmap, QAction
+from PyQt6.QtGui import QShortcut, QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
     QMainWindow,
     QAbstractItemView,
     QAbstractSlider,
     QHeaderView,
 )
+from icecream import ic, install
 
 from .backup_file import BackupFile
-from .backup_results import BackupResults
 from .bz_data_table_model import BzDataTableModel
 from .chunk_model import ChunkModel
 from .dev_debug import DevDebug
-from .main_backup_status import BackupStatus
+from .exceptions import CurrentFileNotSet
 from .progress_box import ProgressBox
 from .qt_mainwindow import Ui_MainWindow
-from .qt_signals import Signals
+from .signals import Signals
 from .to_do_dialog import ToDoDialog
-from .to_do_files import ToDoFiles
-from .utils import MultiLogger, file_size_string
-from .workers import ProgressBoxWorker, BackupStatusWorker, StatsBoxWorker
-from .exceptions import CurrentFileNotSet, PreviousFileNotSet
 from .to_do_dialog_model import ToDoDialogModel
+from .to_do_files import ToDoFiles
+from .utils import MultiLogger
+from .worker_to_do import ToDoWorker
 
 
-def get_timestamp():
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S ")
+def debug_print(message: str):
+    thread_name = threading.current_thread().name
+    date = f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <{thread_name}>'
+
+    print(f"{date} {message}")
 
 
-ic.configureOutput(includeContext=True, prefix=get_timestamp)
+# Set up icecream debugging
+def get_ic_prefix():
+    thread_name = threading.current_thread().name
+    return f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <{thread_name}>'
+
+
+ic.configureOutput(includeContext=True, prefix=get_ic_prefix)
 install()
 
 
 class QTBackupStatus(QMainWindow, Ui_MainWindow):
+    # How large is each chunk in the chunk table, by pixel
     PixelSize = 10
+
+    # A file with less than LargeChunkCount is medium sized. A LargeChunkCount or
+    # larger and I create a separate window for it
     SmallChunkCount = 50
     LargeChunkCount = 400
 
     class ProcessingType(IntEnum):
+        """
+        Enum class to indicate the type of processing we are currently doing
+        """
+
         PREPARING = 0
         TRANSMITTING = 1
 
@@ -76,7 +92,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.debug.disable("bz_prepare.show_line")
         self.debug.disable("lastfilestransmitted.show_line")
 
-        # Set up the system icon
+        # Set up the system icon, for the task bar
 
         icon_path = os.path.join(
             os.path.dirname(sys.modules[__name__].__file__), "backblaze_status.png"
@@ -84,6 +100,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         QCoreApplication.instance().setWindowIcon(QIcon(QPixmap(icon_path)))
 
         # Set up the GUI interface
+
         self.setupUi(self)
         self.show()
         self.data_model_table.resizeRowsToContents()
@@ -114,65 +131,93 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
 
         # **** Set up threads ****
 
+        # Setup to_do thread
+        self.to_do_thread = QThread()
+        self.to_do_thread.setObjectName("ToDoThread")
+        self.to_do: ToDoFiles = ToDoFiles(self)
+        self.to_do.moveToThread(self.to_do_thread)
+        self.to_do_thread.started.connect(self.to_do.run)
+        self.to_do_thread.start()
+
+        # Setup BzLastFileTransmitted Thread
+        from .worker_last_files_transmitted import LastFilesTransmittedWorker
+
+        self.bz_last_files_transmitted_thread = QThread()
+        self.bz_last_files_transmitted_thread.setObjectName("LastFileTransmittedThread")
+        self.bz_last_files_transmitted_thread_worker: LastFilesTransmittedWorker = (
+            LastFilesTransmittedWorker(self)
+        )
+        self.bz_last_files_transmitted_thread_worker.moveToThread(
+            self.bz_last_files_transmitted_thread
+        )
+        self.bz_last_files_transmitted_thread.started.connect(
+            self.bz_last_files_transmitted_thread_worker.run
+        )
+        self.bz_last_files_transmitted_thread.start()
+
+        # Setup BzTransmit Thread
+        from .worker_bz_transmit import BZTransmitWorker
+
+        self.bz_transmit_thread = QThread()
+        self.bz_transmit_thread.setObjectName("BzTransmitThread")
+        self.bz_transmit_thread_worker: BZTransmitWorker = BZTransmitWorker(self)
+        self.bz_transmit_thread_worker.moveToThread(self.bz_transmit_thread)
+        self.bz_transmit_thread.started.connect(self.bz_transmit_thread_worker.run)
+        self.bz_transmit_thread.start()
+
+        # Setup BzPrepare Thread
+        from .worker_bz_prepare import BzPrepareWorker
+
+        self.bz_prepare_thread = QThread()
+        self.bz_prepare_thread.setObjectName("BzTransmitThread")
+        self.bz_prepare_thread_worker: BzPrepareWorker = BzPrepareWorker(self)
+        self.bz_prepare_thread_worker.moveToThread(self.bz_prepare_thread)
+        self.bz_prepare_thread.started.connect(self.bz_prepare_thread_worker.run)
+        self.bz_prepare_thread.start()
+
         # Clock thread
         self.clock_timer = QTimer()
         self.clock_timer.setObjectName("Clock Update")
         self.clock_timer.timeout.connect(self.update_clock_display)
         self.clock_timer.start(1000)
 
-        # BackupStatus thread
-        # TODO: Merge BackupStatus with this class
-        self.backup_status: BackupStatus = BackupStatus(self)
-
-        self.backup_status_thread = QThread()
-        self.backup_status_thread.setObjectName("BackupStatusThread")
-        self.backup_status_worker: BackupStatusWorker = BackupStatusWorker(
-            self.backup_status
-        )
-        self.backup_status_worker.moveToThread(self.backup_status_thread)
-        self.backup_status_thread.started.connect(self.backup_status_worker.run)
-        self.backup_status_thread.start()
-
-        QThread.sleep(2)  # Just give it a chance to start
-
         # Update Stats Box Thread
+        from .worker_stats_box import StatsBoxWorker
+
         self.update_stats_box_thread = QThread()
         self.update_stats_box_thread.setObjectName("UpdateStatsBox")
-        self.update_stats_box_worker: StatsBoxWorker = StatsBoxWorker(
-            self.backup_status
-        )
+        self.update_stats_box_worker: StatsBoxWorker = StatsBoxWorker(self)
         self.update_stats_box_worker.moveToThread(self.update_stats_box_thread)
         self.update_stats_box_worker.update_stats_box.connect(self.update_stats_box)
         self.update_stats_box_thread.started.connect(self.update_stats_box_worker.run)
         self.update_stats_box_thread.start()
 
-        time.sleep(1)  # Let things get settled
-
         # Update Progress Bar Thread
-        self.progress_box = ProgressBox(self.backup_status)
+        from .worker_progress_box import ProgressBoxWorker
+
+        self.progress_box = ProgressBox(self)
 
         self.progress_box_thread = QThread()
         self.progress_box_thread.setObjectName("ProgressBox")
-        self.progress_box_worker: ProgressBoxWorker = ProgressBoxWorker(
-            self.progress_box
-        )
+        self.progress_box_worker: ProgressBoxWorker = ProgressBoxWorker(self)
         self.progress_box_worker.moveToThread(self.progress_box_thread)
         self.progress_box_worker.update_progress_box.connect(self.update_progress_box)
         self.progress_box_thread.started.connect(self.progress_box_worker.run)
         self.progress_box_thread.start()
 
         # Update Chunk Box
-        self.chunk_box_timer = QTimer()
-        self.chunk_box_timer.setObjectName("ChunkBoxUpdate")
-        self.chunk_box_timer.timeout.connect(self.update_chunk_progress)
-        self.chunk_box_timer.start(100)
 
         self.chunk_model = ChunkModel(self)
         self.chunk_box_table.setModel(self.chunk_model)
         self.chunk_dialog_table.setModel(self.chunk_model)
 
+        self.chunk_box_timer = QTimer()
+        self.chunk_box_timer.setObjectName("ChunkBoxUpdate")
+        self.chunk_box_timer.timeout.connect(self.update_chunk_progress)
+        self.chunk_box_timer.start(100)
+
         # Update the windows title
-        self.signals.backup_running.connect(self.set_window_title)
+        self.signals.backup_running.emit(False)
         self.signals.backup_running.emit(False)
 
         # Set up key shortcuts
@@ -197,6 +242,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.show_to_do_button.setDisabled(True)
 
         # Connect the data table with the model
+        self.result_data: Optional[BzDataTableModel] = None
         self.result_data = BzDataTableModel(self)
         self.data_model_table.setModel(self.result_data)
         self.data_model_table.horizontalHeader().setSectionResizeMode(
@@ -204,6 +250,8 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         )
 
     def define_signals(self):
+        self.signals.backup_running.connect(self.set_window_title)
+
         self.signals.start_new_file.connect(self.start_new_file)
         self.signals.preparing.connect(self.set_preparing)
         self.signals.transmitting.connect(self.set_transmitting)
@@ -214,6 +262,12 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             self.scroll_bar_moved
         )
         self.progressBar.valueChanged.connect(self.update_progress_bar_percentage)
+
+        self.signals.to_do_available.connect(self.to_do_available)
+
+    @pyqtSlot()
+    def to_do_available(self):
+        pass
 
     @pyqtSlot(bool)
     def set_window_title(self, running: bool) -> None:
@@ -229,7 +283,6 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.chunk_show_dialog_button.raise_()
 
     def pop_up_todo(self, event):
-        print(f"Clicked {event}")
         if self.to_do_dialog is None:
             self.to_do_dialog = ToDoDialog(self, ToDoDialogModel(self))
             self.to_do_dialog.exec()
@@ -277,11 +330,11 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         if len(selected_items) > 0:
             return  # If we are not at the bottom, don't scroll there
 
-        to_do: ToDoFiles = self.backup_status.to_do
-        self.data_model_table.scrollTo(
-            self.result_data.index(len(to_do.completed_files) - 1, 0),
-            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
-        )
+        if self.result_data is not None:
+            self.data_model_table.scrollTo(
+                self.result_data.index(len(self.to_do.completed_files) - 1, 0),
+                hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+            )
 
     def toggle_selection(self, e):
         if e.row() == self.selected_row:
@@ -361,12 +414,10 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         Called when a new large file is being prepared
         """
 
-        to_do = self.backup_status.to_do  # type: ToDoFiles
-
         # Grab the BackupFile object for the current file. If there isn't one,
         # that is an issue, and probably shouldn't happen, since it was created before.
 
-        preparing_file: BackupFile = to_do.current_file
+        preparing_file: BackupFile = self.to_do.current_file
         # ic(f"set_preparing({str(preparing_file.file_name)})")
 
         if preparing_file is None:
@@ -402,12 +453,10 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
 
         # ic(f"set_transmitting({filename})")
 
-        to_do: ToDoFiles = self.backup_status.to_do
-        if to_do.current_file is None:
-            transmitting_file = self.backup_status.to_do.get_file(filename)
-            to_do.current_file = transmitting_file
+        if self.to_do.current_file is None:
+            self.to_do.current_file = self.to_do.get_file(filename)
 
-        transmitting_file: BackupFile = to_do.current_file
+        transmitting_file: BackupFile = self.to_do.current_file
         if transmitting_file is None:
             return
 
@@ -446,8 +495,7 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         Set up the table that shows the chunk progress
         """
 
-        to_do: ToDoFiles = self.backup_status.to_do
-        current_file: BackupFile = to_do.get_file(str(self.chunk_model.filename))
+        current_file: BackupFile = self.to_do.get_file(str(self.chunk_model.filename))
 
         # ic(f"initialize_chunk_table current_file={self.chunk_model.filename}")
 
@@ -518,11 +566,10 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
             self.chunk_box_table.resizeColumnsToContents()
 
     def update_chunk_progress(self):
-        to_do: ToDoFiles = self.backup_status.to_do
-        if to_do is None or to_do.current_file is None:
+        if self.to_do is None or self.to_do.current_file is None:
             return
 
-        current_file: BackupFile = to_do.current_file
+        current_file: BackupFile = self.to_do.current_file
         if current_file is None:
             return
 
@@ -571,26 +618,23 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         if self.previous_file_name is None:
             self.previous_file_name = file_name
         elif self.previous_file_name != file_name:
-            to_do: ToDoFiles = self.backup_status.to_do
-
             # If I have moved to a new file from the previous file, then I need to
             # close out the processing on the previous file
-            previous_file: BackupFile = to_do.get_file(self.previous_file_name)
+            previous_file: BackupFile = self.to_do.get_file(self.previous_file_name)
             if previous_file is not None:
                 # Mark it complete on the ToDoList
-                to_do.mark_completed(self.previous_file_name)
+                self.to_do.mark_completed(self.previous_file_name)
                 self.result_data.layoutChanged.emit()
                 self.previous_file_name = file_name
 
-        to_do: ToDoFiles = self.backup_status.to_do
-        new_file: BackupFile = to_do.get_file(file_name)
+        new_file: BackupFile = self.to_do.get_file(file_name)
         if new_file is None:
             return
 
         new_file.start_time = datetime.now()
 
         # Set this file to the current file I am working on
-        to_do.current_file = new_file
+        self.to_do.current_file = new_file
 
         # Reset the chunk progress bars
         self.transmit_chunk_progress_bar.setValue(0)

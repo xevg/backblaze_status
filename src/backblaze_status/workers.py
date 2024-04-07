@@ -1,3 +1,2 @@
 from .worker_progress_box import ProgressBoxWorker
-from .worker_backup_status import BackupStatusWorker
 from .worker_stats_box import StatsBoxWorker

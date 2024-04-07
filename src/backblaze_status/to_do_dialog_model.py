@@ -12,7 +12,6 @@ from typing import List
 from docutils.parsers.rst.directives.misc import Role
 
 from .backup_file import BackupFile
-from .backup_results import BackupResults
 from .utils import file_size_string
 from rich.pretty import pprint
 from .backup_file_list import BackupFileList
@@ -60,15 +59,15 @@ class ToDoDialogModel(QAbstractTableModel):
         RowType.UNKNOWN: QColor("mediumslateblue"),
     }
 
-    def __init__(self, qt):
+    def __init__(self, backup_status):
         from .qt_backup_status import QTBackupStatus
 
         super(ToDoDialogModel, self).__init__()
-        self.qt: QTBackupStatus = qt
+        self.backup_status: QTBackupStatus = backup_status
 
         #        self.fixed_font = QFont(".SF NS Mono")
 
-        self.to_do: ToDoFiles = self.qt.backup_status.to_do
+        self.to_do: ToDoFiles = self.backup_status.to_do
         self.display_cache: List[ToDoDialogFile] = []
         self.update_display_cache()
         self.current_index: int = 0

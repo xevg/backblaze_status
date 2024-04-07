@@ -31,12 +31,12 @@ class BackupStatus:
         from .to_do_files import ToDoFiles
 
         self.to_do_file, self.done_file = self.get_file_list()
-        self.to_do = ToDoFiles(qt=self.qt)
+        self.to_do = ToDoFiles(backup_status=self.qt)
         if self.qt:
             self.qt.signals.to_do_available.emit()
 
         # Setup BzLastFileTransmitted Thread
-        from .bz_lastfilestransmitted import BzLastFilesTransmitted
+        from .bz_last_files_transmitted import BzLastFilesTransmitted
 
         time.sleep(2)  # Let the backup_status thread create the to_do list
         self.bz_last_files_transmitted = BzLastFilesTransmitted(self, qt=self.qt)
@@ -50,7 +50,7 @@ class BackupStatus:
         # Setup BzTransmit Thread
         from .bz_transmit import BzTransmit
 
-        self.bz_transmit = BzTransmit(self, qt=self.qt)
+        self.bz_transmit = BzTransmit(self, backup_status=self.qt)
         self.bz_transmit_thread = threading.Thread(
             target=self.bz_transmit.read_file, daemon=True, name="bz_transmit"
         )

@@ -1,13 +1,13 @@
 from __future__ import annotations
+
+from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
     QLabel,
     QDialogButtonBox,
     QTableView,
-    QTableWidgetItem,
     QHeaderView,
-    QTableWidgetItem,
     QLineEdit,
     QPushButton,
     QHBoxLayout,
@@ -15,21 +15,17 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QAbstractItemView,
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QColor
-from .backup_file import BackupFile
-from .utils import file_size_string
-from .bz_data_table_model import BzDataTableModel
-from .to_do_files import ToDoFiles
+
 from .css_styles import CssStyles
 from .to_do_dialog_model import ToDoDialogModel
+from .to_do_files import ToDoFiles
 
 
 class ToDoDialog(QDialog):
-    def __init__(self, qt, model: ToDoDialogModel):
+    def __init__(self, backup_status, model: ToDoDialogModel):
         super().__init__()
 
-        self.qt: "QTBackupStatus" = qt
+        self.backup_status: "QTBackupStatus" = backup_status
         self.model = model
 
         self.setStyleSheet(CssStyles.dark_orange)
@@ -83,8 +79,10 @@ class ToDoDialog(QDialog):
             1, QHeaderView.ResizeMode.Stretch
         )
 
-        if self.qt is not None:
-            self.qt.signals.files_updated.connect(self.model.update_display_cache)
+        if self.backup_status is not None:
+            self.backup_status.signals.files_updated.connect(
+                self.model.update_display_cache
+            )
 
         self.setSizeGripEnabled(True)
         self.layout.addWidget(self.search_group_box)
@@ -92,8 +90,8 @@ class ToDoDialog(QDialog):
         self.layout.addWidget(self.button_box)
         self.setLayout(self.layout)
 
-        if self.qt is not None:
-            self.qt.signals.files_updated.connect(self.update_display_cache)
+        if self.backup_status is not None:
+            self.backup_status.signals.files_updated.connect(self.update_display_cache)
 
         self.update_display_cache()
 
@@ -102,7 +100,7 @@ class ToDoDialog(QDialog):
             self.model.update_display_cache()
 
     def current(self):
-        to_do: ToDoFiles = self.model.qt.backup_status.to_do
+        to_do: ToDoFiles = self.backup_status.to_do
         if to_do is not None and to_do.current_file is not None:
             index = to_do.to_do_file_list.file_list.index(to_do.current_file)
             model_index = self.model.index(index, 0)
@@ -127,7 +125,9 @@ class ToDoDialog(QDialog):
             hits=1000,
             flags=Qt.MatchFlag.MatchContains,
         )
-        key_list = self.qt.backup_status.to_do.to_do_file_list.file_dict.keys()
+        key_list = (
+            self.backup_status.backup_status.to_do.to_do_file_list.file_dict.keys()
+        )
         if self.matching_indexes:
             self.query_results.setText(self.get_label_string())
 

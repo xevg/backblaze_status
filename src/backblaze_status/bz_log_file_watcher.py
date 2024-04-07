@@ -37,14 +37,6 @@ class BzLogFileWatcher(ABC):
         pass
 
     def read_file(self) -> None:
-        while True:
-            if not self.to_do:
-                # Give the main program time to start up and scan the disks
-                time.sleep(10)
-                self.to_do = self.backup_status.current_file
-            else:
-                break
-
         _log_file = self._get_latest_logfile_name()
         self._current_filename = _log_file
         while True:

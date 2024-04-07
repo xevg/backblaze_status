@@ -3,15 +3,17 @@ import threading
 from PyQt6.QtCore import QObject, pyqtSignal, QThread, pyqtSlot
 
 from .progress_box import ProgressBox
+from .qt_backup_status import QTBackupStatus
 
 
 class ProgressBoxWorker(QObject):
     update_progress_box = pyqtSignal(dict)
 
-    def __init__(self, progress_box: ProgressBox) -> None:
+    def __init__(self, backup_status: QTBackupStatus) -> None:
         super(ProgressBoxWorker, self).__init__()
 
-        self.progress_box = progress_box
+        self.backup_status = backup_status
+        self.progress_box = self.backup_status.progress_box
         # self.signals = StatsBoxWorker.Signals()
 
     @pyqtSlot()

@@ -1,27 +1,26 @@
+import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from io import TextIOWrapper
 from pathlib import Path
-import logging
-import time
 
 from .backup_file import BackupFile
-from .bz_log_file_watcher import BzLogFileWatcher
-from .main_backup_status import BackupStatus
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
 from .utils import MultiLogger
 
 
 @dataclass
-class BzTransmit(BzLogFileWatcher):
+class BzTransmit:
     """
     The bztransmit log contains a lot of information about the backup process. I ignore most of it, but there are
     certain key lines that give insights into what is happening in the backup
     """
 
-    backup_status: BackupStatus
-    qt: QTBackupStatus | None = field(default=None)
+    backup_status: QTBackupStatus
+
     to_do: ToDoFiles | None = field(default=None, init=False)
 
     _total_lines: int = field(default=0, init=False)
@@ -38,7 +37,9 @@ class BzTransmit(BzLogFileWatcher):
     )
 
     def __post_init__(self):
-        self._multi_log = MultiLogger("BzTransmit", terminal=True, qt=self.qt)
+        self._multi_log = MultiLogger(
+            "BzTransmit", terminal=True, qt=self.backup_status
+        )
         self._module_name = self.__class__.__name__
         self._multi_log.log("Starting BzTransmit")
 
@@ -110,12 +111,11 @@ class BzTransmit(BzLogFileWatcher):
 
             if not self.to_do.exists(str(_filename)):
                 self.to_do.add_file(
-                    _filename,
+                    str(_filename),
                     is_chunk=chunk,
-                    timestamp=_datetime,
                 )
             self.to_do.current_file = self.to_do.get_file(str(_filename))
-            self.qt.signals.start_new_file.emit(str(_filename))
+            self.backup_status.signals.start_new_file.emit(str(_filename))
 
         _dedup_search_results = self.dedup_search_re.search(_line)
         if _dedup_search_results is not None:
@@ -140,14 +140,13 @@ class BzTransmit(BzLogFileWatcher):
 
             if not self.to_do.exists(str(_filename)):
                 self.to_do.add_file(
-                    Path(_filename),
+                    str(_filename),
                     is_chunk=chunk,
-                    timestamp=_datetime,
                 )  # add_file locks the backup list itself
 
             backup_file = self.to_do.get_file(str(_filename))  # type: BackupFile
             backup_file.add_deduped(chunk_number)
-            self.qt.chunk_model.layoutChanged.emit()
+            self.backup_status.chunk_model.layoutChanged.emit()
             # ic(f"chunk layoutChanged in bztransmit for dedup")
             backup_file.current_chunk = chunk_number
             backup_file.rate = "bztransmit"
@@ -194,14 +193,6 @@ class BzTransmit(BzLogFileWatcher):
             pass
 
     def read_file(self) -> None:
-        while True:
-            if not self.to_do:
-                # Give the main program time to start up and scan the disks
-                time.sleep(10)
-                self.to_do = self.backup_status.to_do
-            else:
-                break
-
         _log_file = self._get_latest_logfile_name()
         self._current_filename = _log_file
         while True:
@@ -215,3 +206,19 @@ class BzTransmit(BzLogFileWatcher):
                 self._first_pass = False
                 _log_file = self._get_latest_logfile_name()
                 self._current_filename = _log_file
+
+    def _tail_file(self, _file: TextIOWrapper) -> str:
+        while True:
+            _line = _file.readline()
+
+            if not _line:
+                if self._first_pass:
+                    self._multi_log.log("Finished first pass", module=self._module_name)
+                self._first_pass = False
+                time.sleep(1)
+                _new_filename = self._get_latest_logfile_name()
+                if _new_filename != self._current_filename:
+                    return
+                continue
+
+            yield _line
