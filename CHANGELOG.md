@@ -2,6 +2,12 @@
 
 
 
+## v0.8.2 (2024-04-07)
+
+### Fix
+
+- Changed a bunch of stuff
+
 ## v0.8.1 (2024-04-07)
 
 ### Fix

@@ -13,7 +13,9 @@ class ProgressBoxWorker(QObject):
         super(ProgressBoxWorker, self).__init__()
 
         self.backup_status = backup_status
-        self.progress_box = self.backup_status.progress_box
+        self.progress_box = ProgressBox(
+            self.backup_status, self)
+
         # self.signals = StatsBoxWorker.Signals()
 
     @pyqtSlot()

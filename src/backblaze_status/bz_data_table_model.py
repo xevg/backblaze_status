@@ -62,11 +62,6 @@ class BzDataTableModel(QAbstractTableModel):
 
         self.in_progress_file: Optional[BackupFile] = None
 
-        # Start a timer to update the interval of the in_progress file
-        self.interval_timer = QTimer()
-        self.interval_timer.timeout.connect(self.update_interval)
-        self.interval_timer.start(1000)  # 1 second
-
         self.fixed_font = QFont(".SF NS Mono")
 
         self.to_do: ToDoFiles = self.backup_status.to_do

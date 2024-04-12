@@ -107,7 +107,7 @@ class ToDoFiles(QObject):
 
         # Start a thread that checks to see if the to_do file has changed, and if it
         # has, re-read it
-        self._reread_file_timer = QTimer()
+        self._reread_file_timer = QTimer(self)
         self._reread_file_timer.timeout.connect(self.reread_to_do_list)
         self._reread_file_timer.start(60000)  # Fire every 60 seconds
 

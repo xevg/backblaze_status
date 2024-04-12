@@ -12,10 +12,11 @@ tb_divisor = Configuration.tb_divisor
 
 
 class ProgressBox:
-    def __init__(self, backup_status):
+    def __init__(self, backup_status, parent=None):
         from .main_backup_status import BackupStatus
 
         self._backup_status: BackupStatus = backup_status
+        self.parent = parent
 
         self._total_size: int = 0
         self._total_size_completed: int = 0
@@ -55,7 +56,7 @@ class ProgressBox:
 
         self.last_calculated: datetime = datetime.now()
 
-        self.calculate_timer_thread = QTimer()
+        self.calculate_timer_thread = QTimer(parent=self.parent)
         self.calculate_timer_thread.timeout.connect(
             lambda: self.calculate()
             if (datetime.now() - self.last_calculated).total_seconds() > 15

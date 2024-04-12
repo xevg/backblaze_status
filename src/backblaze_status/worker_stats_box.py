@@ -35,12 +35,15 @@ class StatsBoxWorker(QObject):
 
     @pyqtSlot()
     def start_stats_box(self):
-        stats_timer = QTimer()
+        stats_timer = QTimer(parent=self)
         stats_timer.timeout.connect(self.update_stats)
         stats_timer.start(10000)  # 10 seconds
 
     @pyqtSlot()
     def update_stats(self):
+        if self.to_do is None:
+            return
+
         total_regular_files_string = (
             f"Total Regular Files:"
             f" <b>{self.to_do.total_current_regular_file_count:,d} /"
@@ -56,8 +59,8 @@ class StatsBoxWorker(QObject):
         )
 
         transmitted_files_string = (
-            f"Transmitted Files: <b>{to_do.transmitted_file_count:,}"
-            f" / {file_size_string(to_do.transmitted_file_size)}</b>{'&nbsp;' * 2}"
+            f"Transmitted Files: <b>{self.to_do.transmitted_file_count:,}"
+            f" / {file_size_string(self.to_do.transmitted_file_size)}</b>{'&nbsp;' * 2}"
         )
 
         transmitted_chunks_string = (

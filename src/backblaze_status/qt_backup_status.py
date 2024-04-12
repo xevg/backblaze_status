@@ -195,11 +195,11 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         # Update Progress Bar Thread
         from .worker_progress_box import ProgressBoxWorker
 
-        self.progress_box = ProgressBox(self)
 
         self.progress_box_thread = QThread()
         self.progress_box_thread.setObjectName("ProgressBox")
         self.progress_box_worker: ProgressBoxWorker = ProgressBoxWorker(self)
+
         self.progress_box_worker.moveToThread(self.progress_box_thread)
         self.progress_box_worker.update_progress_box.connect(self.update_progress_box)
         self.progress_box_thread.started.connect(self.progress_box_worker.run)
@@ -248,6 +248,10 @@ class QTBackupStatus(QMainWindow, Ui_MainWindow):
         self.data_model_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
+        # Start a timer to update the interval of the in_progress file
+        interval_timer = QTimer()
+        interval_timer.timeout.connect(self.result_data.update_interval)
+        interval_timer.start(1000)  # 1 second
 
     def define_signals(self):
         self.signals.backup_running.connect(self.set_window_title)
