@@ -17,7 +17,10 @@ class BzPrepare:
     backup_status: QTBackupStatus
     to_do_files: ToDoFiles | None = field(default=None, init=False)
     BZ_LOG_DIR: str = field(
-        default="/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/bzcurrentlargefile",
+        default=(
+            f"/Library/Backblaze.bzpkg/bzdata/bzbackup/"
+            f"bzdatacenter/bzcurrentlargefile"
+        ),
         init=False,
     )
     file_size: int = field(default=0, init=False)
@@ -77,7 +80,7 @@ class BzPrepare:
                 time.sleep(1)
                 continue
 
-            # Save the size of the file so I can compare it next time
+            # Save the size of the file, so I can compare it next time
             self.file_size = log_file.stat().st_size
             yield _line
 
