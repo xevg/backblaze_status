@@ -2,10 +2,10 @@ import re
 import select
 import time
 from dataclasses import dataclass, field
-from io import TextIOWrapper
 from pathlib import Path
 
-from .backup_file import BackupFile
+from .backblaze_redis import BackBlazeRedis
+from .constants import RedisKeys, RedisMessageTypes
 from .dev_debug import DevDebug
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
@@ -22,7 +22,6 @@ class BzPrepare:
     )
     file_size: int = field(default=0, init=False)
     previous_file: str = field(default=None, init=False)
-    first_pass: bool = field(default=True, init=False)
 
     def __post_init__(self):
         self._multi_log = MultiLogger("BzPrepare", terminal=True, qt=self.backup_status)
@@ -30,12 +29,14 @@ class BzPrepare:
         self._multi_log.log("Starting BzPrepare")
         self.debug: DevDebug = self.backup_status.debug
 
+        self.backblaze_redis = BackBlazeRedis()
+
         # Compile the chunk search regular expression
         self.chunk_search_re = re.compile(r"seq([0-9a-f]+).dat")
 
         # 1       +       00000000026c7d44        0000018c0f260c68        10485760        /Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/bzcurrentlargefile/onechunk_seq00000.dat
 
-    def _get_latest_logfile_name(self) -> Path:
+    def get_latest_logfile_name(self) -> Path:
         """
         Scan the log directory for any files that end in .log, and return the one with the newest modification time
 
@@ -43,93 +44,91 @@ class BzPrepare:
         """
         return Path(self.BZ_LOG_DIR) / "bz_todo_for_chunks.dat"
 
-    def _tail_file(self, _file: TextIOWrapper) -> str:
-        _log_file = self._get_latest_logfile_name()
+    def tail_file(self, _file, log_file: Path) -> str:
         while True:
-            if not _log_file.exists():
+            # This log file can be deleted and overwritten, so I need to check if it
+            # still exists, and if it does, make sure that the file isn't shorter
+            # than the last time I checked
+
+            if not log_file.exists():
                 return
 
-            if _log_file.stat().st_size < self.file_size:
+            if log_file.stat().st_size < self.file_size:
                 self.file_size = 0
                 return
 
-            # TODO: Change this from a readline to a select, and then check the file each time
             # You can do a select() on sys.stdin, and put a timeout on the select, ie:
             #
             # rfds, wfds, efds = select.select( [sys.stdin], [], [], 5)
             #
-            # would give you a five second timeout. If the timeout expired, then rfds
+            # would give you a five-second timeout. If the timeout expired, then rfds
             # would be an empty list. If the user entered something within five
             # seconds, then rfds will be a list containing sys.stdin.
 
             readable, _, _ = select.select([_file], [], [], 0.5)
             if not readable:
+                # If no new line is available, wait a half second then try again
                 time.sleep(0.5)
                 continue
 
+            # I know there is a line waiting for me, so read it
             _line = _file.readline()
-            self.debug.print("bz_prepare.show_line", _line)
             if not _line:
                 time.sleep(1)
                 continue
-            self.file_size = _log_file.stat().st_size
+
+            # Save the size of the file so I can compare it next time
+            self.file_size = log_file.stat().st_size
             yield _line
 
     def read_file(self) -> None:
-        _log_file = self._get_latest_logfile_name()
+        log_file = self.get_latest_logfile_name()
         while True:
-            if not _log_file.exists():
-                # self.debug.print("bz_prepare.log_alert", f"{str(_log_file)} not
-                # found")
+            if not log_file.exists():
                 time.sleep(1)
                 continue
             try:
-                pre_stat = _log_file.stat()
-                self.file_size = pre_stat.st_size
-
-                # self.debug.print("bz_prepare.starting", f"Starting to read
-                # {_log_file}")
-                backup_file: BackupFile = self.to_do_files.current_file
-                while backup_file is None:
+                # Because there is no file name in this file, pull the name of the
+                # current file that is set in bz_transmit
+                current_file: str = self.backblaze_redis.current_file
+                while current_file is None:
+                    # If there is no current file set, then wait till there is one
                     time.sleep(1)
-                    backup_file: BackupFile = self.to_do_files.current_file
+                    current_file: str = self.backblaze_redis.current_file
 
-                while str(backup_file.file_name) == self.previous_file:
+                # Why am I doing this?
+                while current_file == self.previous_file:
                     time.sleep(1)
-                    backup_file: BackupFile = self.to_do_files.current_file
+                    current_file: str = self.backblaze_redis.current_file
 
-                self.previous_file = str(backup_file.file_name)
-                # TODO: Do soemthing to determine that the current file is not the previous file, and if it
-                #  is, then wait for it to be the current?
-                with _log_file.open("r") as _log_fd:
-                    # self._multi_log.debug(f"Reading file {_log_file}")
-                    for _line in self._tail_file(_log_fd):
-                        tell = _log_fd.tell()
-                        self._process_line(_line, tell)
-                self.first_pass = False
+                self.previous_file = current_file
 
-                # self.debug.print("bz_prepare.start", f"Log file ended")
-                _log_file = self._get_latest_logfile_name()
+                with log_file.open("r") as log_fd:
+                    for line in self.tail_file(log_fd, log_file):
+                        # Read until the tail returns rather than yields. If it
+                        # returns, then I need to check for a new file, and start again
+                        self.process_line(line)
+
+                log_file = self.get_latest_logfile_name()
+                self._multi_log.log(f"Log file ended, opening new log file {log_file}")
+
             except FileNotFoundError:
                 # This is expected
                 time.sleep(1)
 
-    def _process_line(self, _line: str, tell: int) -> None:
+    def process_line(self, line: str) -> None:
         #         # 1       +       00000000026c7d44        0000018c0f260c68        10485760        /Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/bzcurrentlargefile/onechunk_seq00000.dat
-        results = self.chunk_search_re.search(_line.strip())
+        results = self.chunk_search_re.search(line.strip())
         if results is not None:
             chunk_hex = results.group(1)
-            chunk_num: int = int(chunk_hex, base=16)
+            chunk_number: int = int(chunk_hex, base=16)
 
-            # TODO: Do soemthing to determine that the current file is not the previous file, and if it
-            #  is, then wait for it to be the current?
+            self.backblaze_redis.publish(
+                RedisMessageTypes.AddPreparedChunk,
+                f"Add prepared chunk {chunk_number}",
+                data={
+                    RedisKeys.Chunk: chunk_number,
+                },
+            )
 
-            backup_file: BackupFile = self.to_do_files.current_file
-            while backup_file is None:
-                time.sleep(1)
-                backup_file: BackupFile = self.to_do_files.current_file
-
-            backup_file.add_prepared(chunk_num)
-            self.backup_status.chunk_model.layoutChanged.emit()
-            # ic(f"chunk layoutChanged in prepare")
-            return
+        return
