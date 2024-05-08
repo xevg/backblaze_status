@@ -1,22 +1,19 @@
-import math
-from threading import Lock
-from typing import Any
 from datetime import datetime
+from enum import IntEnum
+from typing import Any
+
 from PyQt6.QtCore import (
     QAbstractTableModel,
     Qt,
     QModelIndex,
-    pyqtSlot,
     QTimer,
     QReadWriteLock,
 )
 from PyQt6.QtGui import QColor
-from enum import IntEnum
 
-from .backup_file import BackupFile
+from .constants import ToDoColumns
+from .current_state import CurrentState
 from .to_do_files import ToDoFiles
-from rich.pretty import pprint
-from icecream import ic
 
 
 class ChunkModel(QAbstractTableModel):
@@ -35,13 +32,9 @@ class ChunkModel(QAbstractTableModel):
 
     def __init__(self, qt):
         from .qt_backup_status import QTBackupStatus
-        from .to_do_files import ToDoFiles
 
         super(ChunkModel, self).__init__()
         self.backup_status: QTBackupStatus = qt
-
-        self._file_name: str | None = None
-        self.current_file: BackupFile | None = None
 
         self.use_dialog: bool = False
         self.last_reset_table_time: datetime = datetime.now()
@@ -56,46 +49,30 @@ class ChunkModel(QAbstractTableModel):
             recursionMode=QReadWriteLock.RecursionMode.Recursive
         )
 
-        # self.qt.signals.new_large_file.connect(self.set_filename)
-
-    @property
-    def filename(self) -> str:
-        return self._file_name
-
-    @filename.setter
-    def filename(self, value: str):
-        # ic(f"set chunk filename to {value}")
-        self._file_name = value
-        self.reset_table()
-        self.layoutChanged.emit()
-
     def calculate_chunk(self, row: int, column: int) -> int:
         cell_size = self.table_size * self.table_size
-        multiplier = self.current_file.total_chunk_count / cell_size
+        multiplier = (
+            CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.ChunkCount]
+            / cell_size
+        )
         chunk = row * self.table_size + column
         chunk *= multiplier
         return int(chunk)
 
     def reset_table(self):
-        try:
-            self.lock.lockForWrite()
-            self._reset_table()
-        finally:
-            self.lock.unlock()
-
-    def _reset_table(self):
         to_do: ToDoFiles = self.backup_status.to_do
-        if to_do is None:
+        if to_do is None or CurrentState.CurrentFile is None:
             return
 
-        self.current_file: BackupFile = to_do.get_file(str(self.filename))
-        # ic(f"reset_table for {self.filename} ({self.current_file}")
-
-        if self.current_file is None or self.current_file.total_chunk_count == 0:
+        if (
+            CurrentState.CurrentFile is None
+            or CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.ChunkCount]
+            == 0
+        ):
             self.table_size = 0
             return
 
-        chunks = self.current_file.total_chunk_count
+        chunks = CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.ChunkCount]
 
         self.use_dialog = False
 
@@ -110,19 +87,22 @@ class ChunkModel(QAbstractTableModel):
             self.use_dialog = True
             self.table_size = self.TableSize.X_Large
 
-        # Hard coding it
-        # self.use_dialog = False
-        # self.table_size = self.TableSize.Medium
-
         pixel_size = int(self.TableSize.X_Large / self.table_size)
-        max_dimension = (self.table_size * pixel_size) + 5  # 5 for padding
 
+        max_dimension = (self.table_size * pixel_size) + 5  # 5 for padding
         # max_size = (self.rows_columns * self.qt.PixelSize) + 5
+
         if self.use_dialog:
-            # self.qt.chunk_dialog_table.setMaximumSize(max_dimension, max_dimension)
+            self.backup_status.chunk_table_dialog_box.dialog_chunk_table.setMaximumSize(
+                max_dimension, max_dimension
+            )
             for spot in range(self.table_size):
-                self.backup_status.chunk_dialog_table.setColumnWidth(spot, pixel_size)
-                self.backup_status.chunk_dialog_table.setRowHeight(spot, pixel_size)
+                self.backup_status.chunk_table_dialog_box.dialog_chunk_table.setColumnWidth(
+                    spot, pixel_size
+                )
+                self.backup_status.chunk_table_dialog_box.dialog_chunk_table.setRowHeight(
+                    spot, pixel_size
+                )
         else:
             # self.qt.chunk_box_table.setMaximumSize(max_dimension, max_dimension)
             for spot in range(self.table_size):
@@ -133,12 +113,8 @@ class ChunkModel(QAbstractTableModel):
         row = index.row()
         column = index.column()
 
-        to_do: ToDoFiles = self.backup_status.to_do
-        if to_do is None:
-            return
-
-        self.current_file: BackupFile = to_do.get_file(self.filename)
-        if self.current_file is None:
+        to_do = CurrentState.ToDoList[CurrentState.CurrentFile]
+        if to_do is None or CurrentState.CurrentFile is None:
             return
 
         chunk = self.calculate_chunk(row, column)  # row * self.rows_columns + column
@@ -149,20 +125,20 @@ class ChunkModel(QAbstractTableModel):
         # then prepared
 
         if role == Qt.ItemDataRole.BackgroundRole:
-            if chunk in self.current_file.deduped_chunks:
+            if chunk in to_do[ToDoColumns.DedupedChunks]:
                 return QColor("#f5a356")
 
-            if chunk in self.current_file.transmitted_chunks:
+            if chunk in to_do[ToDoColumns.TransmittedChunks]:
                 return QColor("#84fab0")
 
-            if chunk in self.current_file.prepared_chunks:
+            if chunk in to_do[ToDoColumns.PreparedChunks]:
                 return QColor("#2575fc")
 
             return QColor("#818a84")  # The default color
 
     def rowCount(self, index: QModelIndex) -> int:
         # Subtract two so that no matter what the way things are, we don't go over
-        return self.table_size
+        return int(self.table_size)
 
     def columnCount(self, index: QModelIndex) -> int:
         # Subtract two so that no matter what the way things are, we don't go over
@@ -171,4 +147,4 @@ class ChunkModel(QAbstractTableModel):
                 self.reset_table()
                 self.last_reset_table_time = datetime.now()
 
-        return self.table_size
+        return int(self.table_size)

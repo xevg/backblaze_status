@@ -2,6 +2,48 @@
 
 
 
+## 0.9.4 (2024-05-08)
+
+### Fix
+
+- added debugging
+
+## 0.9.3 (2024-05-08)
+
+### Refactor
+
+- refactored
+
+## 0.9.2 (2024-05-08)
+
+### Fix
+
+- add current state
+
+## 0.9.1 (2024-05-08)
+
+### Fix
+
+- remove unneeded imports
+
+## 0.9.0 (2024-04-22)
+
+### Feat
+
+- manage a shared state in the application
+
+### Refactor
+
+- use slot/signal instead of redis
+- fix typos
+- convert to use redis
+
+## 0.8.3 (2024-04-12)
+
+### Fix
+
+- Change bad Qtimers
+
 ## v0.8.2 (2024-04-07)
 
 ### Fix
