@@ -4,22 +4,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .backup_file import BackupFile
-from .bz_batch import BzBatch
-from .bz_log_file_watcher import BzLogFileWatcher
-from .main_backup_status import BackupStatus
+from .constants import Key, MessageTypes
 from .qt_backup_status import QTBackupStatus
 from .to_do_files import ToDoFiles
 from .utils import MultiLogger
-from .configuration import Configuration
-from .dev_debug import DevDebug
-from rich.pretty import pprint
 
 
 @dataclass
 class BzLastFilesTransmitted:
     """
-    Continuously scan the lastfiletransmitted file to get information about the state of the backup
+    Continuously scan the lastfiletransmitted file to get information about the
+    state of the backup
     """
 
     backup_status: QTBackupStatus
@@ -29,16 +24,15 @@ class BzLastFilesTransmitted:
     _dedups: int = field(default=0, init=False)
     _blank_lines: int = field(default=0, init=False)
     _bytes: int = field(default=0, init=False)
-    _batch_count: int = field(default=0, init=False)
-    _is_batch: bool = field(default=False, init=False)
     _current_filename: Path | None = field(default=None, init=False)
     _previous_filename: str | None = field(default=None, init=False)
     _current_large_filename: str | None = field(default=None)
     _first_pass: bool = field(default=True, init=False)
-    _batch: BzBatch | None = field(default=None, init=False)
     _file_size: int = field(default=0, init=False)
+    publish_count: int = field(default=0, init=False)
     BZ_LOG_DIR: str = field(
-        default="/Library/Backblaze.bzpkg/bzdata/bzlogs/bzreports_lastfilestransmitted/",
+        default="/Library/Backblaze.bzpkg/bzdata/"
+        "bzlogs/bzreports_lastfilestransmitted/",
         init=False,
     )
 
@@ -50,12 +44,13 @@ class BzLastFilesTransmitted:
         self._multi_log.log("Starting BzLastFilesTransmitted")
 
         self.go_to_end = True
-        self.debug = self.backup_status.debug
         self.signals = self.backup_status.signals
+        # self.backblaze_redis = BackBlazeRedis()
 
-    def _get_latest_logfile_name(self) -> Path:
+    def get_latest_logfile_name(self) -> Path:
         """
-        Scan the log directory for any files that end in .log, and return the one with the newest modification time
+        Scan the log directory for any files that end in .log, and return the one
+        with the newest modification time
 
         :return:
         """
@@ -80,7 +75,6 @@ class BzLastFilesTransmitted:
         _line = _line.strip()
         _chunk_number = 0
         chunk: bool = False
-        multiple_flag: bool = False
 
         if _line == "":
             self._blank_lines += 1
@@ -88,8 +82,6 @@ class BzLastFilesTransmitted:
             self._total_lines += 1
         if not self._first_pass:
             self._multi_log.log(_line, level=logging.DEBUG)
-
-        self.debug.print("lastfilestransmitted.show_line", _line)
 
         """
         The format of the file are fixed length fields, separated by "-" characters
@@ -153,42 +145,57 @@ class BzLastFilesTransmitted:
 
         match len(_fields):
             case 6:
-                self._batch = None  # Since it's not just 3 fields, reset the batch
                 _timestamp, _size, _type, _rate, _bytes_str, _filename = _fields
 
                 # Convert bytes to int, if we can
                 try:
                     _bytes = int(_bytes_str.strip().split(" ")[0])
-                except:
+                except Exception as exp:
                     _bytes = 0
 
                 match _filename[0:5]:
-                    # If it's a chunk, process it that way. Chunks are hex numbers I convert into ints
+                    # If it's a chunk, process it that way. Chunks are hex numbers
+                    # I convert into ints
                     case "Chunk":
                         _chunk_number = int(_filename[6:11], base=16)
                         _filename = _filename[15:]
                         chunk = True
-                        self._is_batch = False
 
-                    # If it's a multiple file batch, create a new batch construct
-                    #  I don't think that I'm actually using this for anything,
                     case "Multi":
-                        self._batch = BzBatch(size=_bytes, timestamp=_timestamp)
-                        self._batch_count += 1
-                        self._is_batch = True
                         # Since we don't do anything with the multi line, return now
                         return
+
             case 3:
-                # This is a file within the batch
+                # This is a file within the batch, then the file is started and
+                # completed within one line, so send a start and a complete
                 _timestamp, _, _filename = _fields
                 _bytes = 0
-                self._batch.add_file(_filename)
+                _datetime = datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
+                self.emit_message(
+                    MessageTypes.StartNewFile,
+                    f"New file is {_filename}",
+                    {
+                        Key.FileName: _filename,
+                        Key.StartTime: _datetime,
+                    },
+                )
+                self.emit_message(
+                    MessageTypes.Completed,
+                    f"{_filename} Completed",
+                    {
+                        Key.FileName: _filename,
+                        Key.EndTime: _datetime,
+                    },
+                )
+                return
+
             case _:
                 print(f"Unrecognized line: {_line}")
                 return
 
-        # At this point we have a filename. I take a look at the timestamp, because when I start up the monitor,
-        #  there can be a lot of older information that I don't care about, so I discard anything over 4 hours old
+        # At this point we have a filename. I take a look at the timestamp,
+        # because when I start up the monitor,there can be a lot of older information
+        # that I don't care about, so I discard anything over 4 hours old
 
         _datetime = datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
 
@@ -197,36 +204,35 @@ class BzLastFilesTransmitted:
         if (now - _datetime).seconds > 60 * 60 * 4:
             return
 
-        # If the file we are backing up is not on the to_do list, then we add it
-        if not self.to_do_files.exists(_filename):
-            print(f"Unexpected file {_filename} being backed up")
-            self.to_do_files.add_file(
-                _filename,
-                is_chunk=chunk,
-            )  # No lock here because add_file locks
-
-            self.to_do_files.current_file = self.to_do_files.get_file(_filename)
-
         if self._previous_filename is None:
             self._previous_filename = _filename
 
+            self.emit_message(
+                MessageTypes.StartNewFile,
+                f"New file is {_filename}",
+                {
+                    Key.FileName: _filename,
+                    Key.StartTime: _datetime,
+                },
+            )
+
             # We have started transmitting, so set the marker for that
-            self.signals.transmitting.emit(_filename)
+            # self.signals.transmitting.emit(_filename)
 
         elif self._previous_filename != _filename:
             # The filename has changed, and we are still transmitting
 
+            self.emit_message(
+                MessageTypes.Completed,
+                f"{self._previous_filename} completed",
+                {
+                    Key.FileName: self._previous_filename,
+                    Key.EndTime: datetime.now(),
+                },
+            )
+
             # Now set the new filename tp the previous filename
             self._previous_filename = _filename
-
-            # We have started transmitting, so set the marker for that
-            self.signals.transmitting.emit(_filename)
-
-        # Get the file off of the to_list. I have to lock it so no other thread
-        # reads/writes from it while I do
-        backup_file = self.to_do_files.get_file(str(_filename))  # type: BackupFile
-        if backup_file is None:
-            return
 
         if _rate:
             _rate = _rate.strip()
@@ -237,46 +243,61 @@ class BzLastFilesTransmitted:
             # Keep track of how many files and bytes were deduplicated
             if dedup:
                 if chunk:
-                    backup_file.add_deduped(_chunk_number)
-                    # Since we've updated the backup_file, let the chunk_model know
-                    self.backup_status.chunk_model.layoutChanged.emit()
-                    # ic(f"chunk layoutChanged in lastfilestransmitted for dedup")
+                    self.emit_message(
+                        MessageTypes.AddDedupedChunk,
+                        f"Add deduped chunk {_chunk_number} to {_filename}",
+                        {
+                            Key.FileName: _filename,
+                            Key.Chunk: _chunk_number,
+                        },
+                    )
 
                 else:
-                    file = Path(_filename[15:])
-                    try:
-                        backup_file.deduped_bytes += file.stat().st_size
-                    except FileNotFoundError:
-                        pass
+                    self.emit_message(
+                        MessageTypes.IsDeduped,
+                        f"Add deduped file {_filename}",
+                        {
+                            Key.FileName: _filename,
+                            Key.IsDeduped: True,
+                        },
+                    )
 
-                backup_file.is_deduped = True
-            else:
+            else:  # If it's not a dedup
                 if chunk:
-                    backup_file.add_transmitted(_chunk_number)
-                    # Since we've updated the backup_file, let the chunk_model know
-                    self.backup_status.chunk_model.layoutChanged.emit()
-                    # ic(f"chunk layoutChanged in lastfilestransmitted for transmitted")
+                    self.emit_message(
+                        MessageTypes.AddTransmittedChunk,
+                        f"Add transmitted chunk {_chunk_number} to " f"{_filename}",
+                        {
+                            Key.FileName: _filename,
+                            Key.Chunk: _chunk_number,
+                        },
+                    )
 
-                else:
-                    backup_file.transmitted_bytes += _bytes
-                    backup_file.is_deduped = False
+                else:  # It's not a chunk, then the file was completed in one line
+                    self.emit_message(
+                        MessageTypes.Completed,
+                        f"{_filename} Completed",
+                        {
+                            Key.FileName: _filename,
+                            Key.EndTime: datetime.now(),
+                        },
+                    )
 
-            if _rate != "dedup" and _rate != "":
-                _rate = f"{int(_rate[:-10]):,}{_rate[-10:]}"
-
-            backup_file.rate = _rate
-            backup_file.total_bytes_processed += _bytes
-
-        if self._batch:
-            backup_file.batch = self._batch
-            backup_file.start_time = datetime.now()
-            self.to_do_files.mark_completed(str(backup_file.file_name))
-
-        self._bytes += _bytes
         return
 
+    def emit_message(self, message_type: str, message_string: str, data: dict) -> None:
+        self.publish_count += 1
+        message = {
+            "type": message_type,
+            "message": message_string,
+            "data": data,
+            "timestamp": str(datetime.now()).split(".")[0],
+            "publish_count": self.publish_count,
+        }
+        self.backup_status.signals.get_messages.emit(message)
+
     def read_file(self) -> None:
-        _log_file = self._get_latest_logfile_name()
+        _log_file = self.get_latest_logfile_name()
         pre_stat = _log_file.stat()
         self._file_size = pre_stat.st_size
         self._current_filename = _log_file
@@ -300,7 +321,7 @@ class BzLastFilesTransmitted:
                     self._first_pass = False
                     self._multi_log.log("Finished first pass", module=self._module_name)
 
-                    _log_file = self._get_latest_logfile_name()
+                    _log_file = self.get_latest_logfile_name()
                     self._current_filename = _log_file
 
     def _tail_file(self, _file) -> str:
@@ -309,7 +330,7 @@ class BzLastFilesTransmitted:
 
             if not _line:
                 time.sleep(1)
-                _new_filename = self._get_latest_logfile_name()
+                _new_filename = self.get_latest_logfile_name()
                 if _new_filename != self._current_filename:
                     return
                 continue
