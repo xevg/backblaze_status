@@ -19,11 +19,15 @@ from PyQt6.QtWidgets import (
 from .css_styles import CssStyles
 from .to_do_dialog_model import ToDoDialogModel
 from .to_do_files import ToDoFiles
+from .current_state import CurrentState
+from .constants import ToDoColumns
 
 
 class ToDoDialog(QDialog):
     def __init__(self, backup_status, model: ToDoDialogModel):
         super().__init__()
+
+        from .qt_backup_status import QTBackupStatus
 
         self.backup_status: "QTBackupStatus" = backup_status
         self.model = model
@@ -79,10 +83,10 @@ class ToDoDialog(QDialog):
             1, QHeaderView.ResizeMode.Stretch
         )
 
-        if self.backup_status is not None:
-            self.backup_status.signals.files_updated.connect(
-                self.model.update_display_cache
-            )
+        # if self.backup_status is not None:
+        #     self.backup_status.signals.files_updated.connect(
+        #         self.model.update_display_cache
+        #     )
 
         self.setSizeGripEnabled(True)
         self.layout.addWidget(self.search_group_box)
@@ -90,24 +94,23 @@ class ToDoDialog(QDialog):
         self.layout.addWidget(self.button_box)
         self.setLayout(self.layout)
 
-        if self.backup_status is not None:
-            self.backup_status.signals.files_updated.connect(self.update_display_cache)
+        # if self.backup_status is not None:
+        #     self.backup_status.signals.files_updated.connect(self.update_display_cache)
 
-        self.update_display_cache()
+        # self.update_display_cache()
 
-    def update_display_cache(self):
-        if self.isVisible():
-            self.model.update_display_cache()
+    # def update_display_cache(self):
+    #     pass
+    #     # if self.isVisible():
+    #     #     self.model.update_display_cache()
 
     def current(self):
-        to_do: ToDoFiles = self.backup_status.to_do
-        if to_do is not None and to_do.current_file is not None:
-            index = to_do.to_do_file_list.file_list.index(to_do.current_file)
-            model_index = self.model.index(index, 0)
-            self.table.scrollTo(
-                model_index,
-                hint=QAbstractItemView.ScrollHint.PositionAtCenter,
-            )
+        index = CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.IndexCount]
+        model_index = self.model.index(index, 0)
+        self.table.scrollTo(
+            model_index,
+            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
 
     def search(self, search_string: str):
         # self.table.setCurrentItem(None)
@@ -125,9 +128,9 @@ class ToDoDialog(QDialog):
             hits=1000,
             flags=Qt.MatchFlag.MatchContains,
         )
-        key_list = (
-            self.backup_status.backup_status.to_do.to_do_file_list.file_dict.keys()
-        )
+        # key_list = (
+        #     self.backup_status.backup_status.to_do.to_do_file_list.file_dict.keys()
+        # )
         if self.matching_indexes:
             self.query_results.setText(self.get_label_string())
 
