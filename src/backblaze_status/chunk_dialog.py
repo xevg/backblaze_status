@@ -10,6 +10,9 @@ from PyQt6.QtWidgets import (
 
 
 class ChunkDialog(QDialog):
+    """
+    A custom QDialog box for the chunk progress table
+    """
 
     def __init__(self, parent=None):
         super(ChunkDialog, self).__init__(parent)
@@ -17,14 +20,18 @@ class ChunkDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
-        self.dialog_chunk_table = self._create_chunk_table()
+        self.dialog_chunk_table = self.create_chunk_table()
 
         self.chunk_table_dialog_layout = QVBoxLayout()
         self.chunk_table_dialog_layout.addWidget(self.dialog_chunk_table)
 
         self.setLayout(self.chunk_table_dialog_layout)
+        self.show()
 
-    def _create_chunk_table(self):
+    def create_chunk_table(self):
+        """
+        Create the table for the chunk progress
+        """
         chunk_table = QTableView(self)
         chunk_table.setObjectName("ChunkTable")
 
