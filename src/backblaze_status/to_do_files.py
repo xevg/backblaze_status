@@ -1,19 +1,18 @@
+import logging
 import os
 import threading
 import time
-from dataclasses import field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
-from icecream import ic
 
+import pandas as pd
 from PyQt6.QtCore import QTimer, QReadWriteLock, QObject, pyqtSignal, pyqtSlot, QThread
+from pandas import DataFrame
 
-from .backup_file import BackupFile
-from .backup_file_list import BackupFileList
 from .configuration import Configuration
-from .dev_debug import DevDebug
-from .exceptions import CompletedFileNotFound
+from .constants import ToDoColumns, Key, MessageTypes, States
+from .current_state import CurrentState
 from .locks import Lock
 from .utils import MultiLogger, file_size_string
 
@@ -40,7 +39,7 @@ class ToDoFiles(QObject):
     signal_add_file = pyqtSignal(str, bool)
 
     # The directory where the to_do files live
-    BZ_DIR: str = "/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter/"
+    BZ_DIR: str = "/Library/Backblaze.bzpkg/bzdata/bzbackup/bzdatacenter"
 
     def __init__(self, backup_status):
         from .qt_backup_status import QTBackupStatus
@@ -51,7 +50,6 @@ class ToDoFiles(QObject):
         self._multi_log = MultiLogger("ToDoFiles", terminal=True)
         self._module_name = self.__class__.__name__
         self._multi_log.log("Creating ToDoFiles")
-        self.debug = DevDebug()
 
         # An instance of the QTBackupStatus
         self.backup_status: "QTBackupStatus" = backup_status
@@ -61,24 +59,13 @@ class ToDoFiles(QObject):
             recursionMode=QReadWriteLock.RecursionMode.Recursive
         )
 
-        # These two hold the list of to do files. The _file_list is a list in order,
-        # and the _file_dict contains a dictionary of the files by file_name. The
-        # BackupFile class has a pointer to the list, so that it can be retrieved that
-        # way as well.
-
-        self._to_do_file_list: BackupFileList = BackupFileList()
+        self.to_do_list: Optional[DataFrame] = None
 
         # The _completed_files class contains the list of completed files
-        self._completed_file_list: BackupFileList = BackupFileList()
+        # self._completed_file_list: BackupFileList = BackupFileList()
 
         # Storage for the modification time of the current to do file
         self._file_modification_time: float = 0.0
-
-        # Flag for if the backup is currently running
-        self._backup_running: bool = False
-
-        # The current file that is being backed up
-        self._current_file: Optional[BackupFile] = None
 
         # The current run
         self._current_run: int = 1
@@ -89,24 +76,33 @@ class ToDoFiles(QObject):
         # The first file I process off the to do list. This is so that I can accurately
         # assess the rate
 
-        self._starting_file: Optional[BackupFile] = None
-        self._starting_index: int = 0
-
         self._reread_file_timer: Optional[QTimer] = None
+        self._stats_timer: Optional[QTimer] = None
+
+        self.first_pass = True
+
+        self.total_files: int = 0
+        self.total_bytes: float = 0.0
+        self.total_files_to_process: int = 0
+        self.total_bytes_to_process: float = 0.0
+
+        self.backup_status.signals.get_messages.connect(self.get_emit_messages)
+
+        CurrentState.StartTime = datetime.now()
+
+        self.previous_file = None
 
     def run(self):
         threading.current_thread().name = QThread.currentThread().objectName()
 
         # Setup signals
 
-        self.signal_add_file.connect(self._add_file)
-        self.signal_mark_completed.connect(self._mark_completed)
-
         # Do the initial read of the to_do file
-        self._read()
+        self.read()
 
         # Start a thread that checks to see if the to_do file has changed, and if it
         # has, re-read it
+
         self._reread_file_timer = QTimer(self)
         self._reread_file_timer.timeout.connect(self.reread_to_do_list)
         self._reread_file_timer.start(60000)  # Fire every 60 seconds
@@ -114,29 +110,24 @@ class ToDoFiles(QObject):
         self.backup_status.signals.to_do_available.emit()
 
     def __len__(self) -> int:
-        return len(self._to_do_file_list.file_list)
-
-    def __getitem__(self, index) -> BackupFile:
-        if isinstance(index, int):
-            return self._to_do_file_list.file_list[index]
-        elif isinstance(index, str):
-            return self._to_do_file_list.file_dict.get(index)
+        if self.to_do_list is None:
+            return 0
         else:
-            raise TypeError("Invalid argument type")
+            return self.to_do_list.shape[0]
 
-    def _read(self, read_existing_file: bool = False) -> None:
+    def read(self, read_existing_file: bool = False) -> None:
         """
         This reads the to_do file and stores it in two data structures,
           - a dictionary so that I can find the file, and
           - a list, so that I can see what the next files are
 
-          The structure of the file that I care about are the 6th field, which is the filename,
-          and the fifth field, which is the file size.
+          The structure of the file that I care about are the 6th field,
+          which is the filename, and the fifth field, which is the file size.
         :return:
         """
 
         self._to_do_file_name = self.get_to_do_file()
-
+        file_index = {}
         with Lock.DB_LOCK:
             try:
                 file = Path(self._to_do_file_name)
@@ -147,41 +138,109 @@ class ToDoFiles(QObject):
                 self._file_modification_time = 0
                 return
 
-            count = 0
+            CurrentState.BackupRunning = True
+            self.backup_status.signals.backup_running.emit(True)
+
+            count = -1
+            to_do_list = []
             try:
                 with open(file, "r") as tdf:
                     for todo_line in tdf:
                         count += 1
                         todo_fields = todo_line.strip().split("\t")
-                        todo_filename = Path(todo_fields[5])
-                        if self.exists(str(todo_filename)):
-                            continue
+                        todo_filename = todo_fields[5]
+                        file_path = Path(todo_filename)
+                        try:
+                            if not file_path.exists():
+                                state = Key.Skipped
+                            else:
+                                state = Key.Unprocessed
+                        except PermissionError:
+                            state = Key.Unprocessed
+                        # if self.exists(str(todo_filename)):
+                        #     continue
 
                         todo_file_size = int(todo_fields[4])
 
-                        backup = BackupFile(todo_filename, todo_file_size)
+                        # backup = BackupFile(todo_filename, todo_file_size)
+                        total_chunk_count = 0
+                        is_large_file = False
                         if todo_file_size > Configuration.default_chunk_size:
-                            backup.total_chunk_count = int(
+                            total_chunk_count = int(
                                 todo_file_size / Configuration.default_chunk_size
                             )
-                            backup.is_large_file = True
-                        self._to_do_file_list.append(backup)
+                            is_large_file = True
+                        to_do_list.append(
+                            [
+                                count,
+                                todo_filename,
+                                todo_file_size,
+                                is_large_file,
+                                pd.NA,  # IsDeduped
+                                total_chunk_count,
+                                state,  # State
+                                None,  # StartTime
+                                None,  # EndTime
+                                0,  # DedupedBytes
+                                set(),  # DedupedChunks,
+                                0,  # DedupedChunksCount,
+                                0,  # TransmittedBytes,
+                                set(),  # TransmittedChunks
+                                0,  # TransmittedChunksCount
+                                0,  # PreparedBytes
+                                set(),  # PreparedChunks
+                                0,  # PreparedChunksCount
+                            ]
+                        )
+                        file_index[count] = todo_filename
 
-                self._backup_running = True
-                if read_existing_file:
-                    self._multi_log.log(
-                        f"Added {count:,} lines from To Do file after"
-                        f" re-reading {self._to_do_file_name}"
-                    )
-                else:
-                    self._multi_log.log(
-                        f"Read {count:,} lines from To Do file"
-                        f" {self._to_do_file_name}"
-                    )
+                self.to_do_list = DataFrame(
+                    to_do_list,
+                    columns=[
+                        ToDoColumns.IndexCount,
+                        ToDoColumns.FileName,
+                        ToDoColumns.FileSize,
+                        ToDoColumns.IsLargeFile,
+                        ToDoColumns.IsDeduped,
+                        ToDoColumns.ChunkCount,
+                        ToDoColumns.State,
+                        ToDoColumns.StartTime,
+                        ToDoColumns.EndTime,
+                        ToDoColumns.DedupedBytes,
+                        ToDoColumns.DedupedChunks,
+                        ToDoColumns.DedupedChunksCount,
+                        ToDoColumns.TransmittedBytes,
+                        ToDoColumns.TransmittedChunks,
+                        ToDoColumns.TransmittedChunksCount,
+                        ToDoColumns.PreparedBytes,
+                        ToDoColumns.PreparedChunks,
+                        ToDoColumns.PreparedChunksCount,
+                    ],
+                ).set_index(ToDoColumns.FileName)
+                CurrentState.FileIndex = file_index
+
+                # Remove duplicates, keeping only the last one
+                self.to_do_list = self.to_do_list[
+                    ~self.to_do_list.index.duplicated(keep="last")
+                ]
+
+                # if read_existing_file:
+                #     self._multi_log.log(
+                #         f"Added {count:,} lines from To Do file after"
+                #         f" re-reading {self._to_do_file_name}"
+                #     )
+                # else:
+                self._multi_log.log(
+                    f"Read {count:,} lines from To Do file" f" {self._to_do_file_name}"
+                )
+                CurrentState.ToDoList = self.to_do_list.to_dict(orient="index")
+                CurrentState.ToDoListLength = len(self.to_do_list.index)
+
                 self.backup_status.signals.backup_running.emit(True)
-                self.backup_status.signals.files_updated.emit()
-                self.backup_status.result_data.layoutChanged.emit()
-            except:
+
+                self.backup_status.signals.to_do_available.emit()
+            except Exception as exp:
+                print(exp)
                 pass
 
     def reread_to_do_list(self):
@@ -189,14 +248,14 @@ class ToDoFiles(QObject):
         Checks to see if there is a new to_do file, and if there is, reread it
         """
         self._to_do_file_name = self.get_to_do_file()
-        if not self.backup_running and self._to_do_file_name is not None:
+        if not CurrentState.BackupRunning and self._to_do_file_name is not None:
             # If the backup is not running already, and there is a new to_do
             # file, then read it after incrementing the run number
             self._current_run += 1
-            self._read()
+            self.read()
             return
 
-        if not self.backup_running and self._to_do_file_name is None:
+        if not CurrentState.BackupRunning and self._to_do_file_name is None:
             self._multi_log.log(
                 f"Backup not running. Waiting for 1 minute and trying again ..."
             )
@@ -204,14 +263,14 @@ class ToDoFiles(QObject):
 
         # If the backup is running and the to_do file name is not None, then see
         # if we need to re-read the file because there is new data in it
-        if self.backup_running and self._to_do_file_name is not None:
+        if CurrentState.BackupRunning and self._to_do_file_name is not None:
             try:
                 file = Path(self._to_do_file_name)
                 stat = file.stat()
             except FileNotFoundError:
                 # If there is no file, then the backup is complete, then mark it
                 # as complete
-                if self.backup_running:
+                if CurrentState.BackupRunning:
                     self._mark_backup_not_running()
                 return
 
@@ -220,17 +279,473 @@ class ToDoFiles(QObject):
 
             if self._file_modification_time != stat.st_mtime:
                 self._multi_log.log("To Do file changed, rereading")
-                self._read(read_existing_file=True)
+                self.read(read_existing_file=True)
+            else:
+                self._multi_log.log("To Do file has not changed")
+
+    @pyqtSlot(dict)
+    def get_emit_messages(self, message_data: dict):
+        self.process_received_message(message_data)
+
+    def process_received_message(self, message_data: dict) -> None:
+        prefix = f"Message Received ({message_data['publish_count']:>8,}):"
+
+        if (
+            CurrentState.CurrentFile is None
+            and message_data["data"].get(Key.FileName) is not None
+        ):
+            CurrentState.CurrentFile = message_data["data"][Key.FileName]
+            self.post_initialize_to_do_list(CurrentState.CurrentFile)
+
+        match message_data["type"]:
+
+            case MessageTypes.StartNewFile:
+                # This lets me know that new file has started, and it is now
+                # the current file
+                file_name = message_data["data"][Key.FileName]
+                start_time = message_data["data"][Key.StartTime]
+                self._multi_log.log(
+                    f"{prefix} File Started: " f"{file_name}",
+                    module=self._module_name,
+                )
+                self.start_new_file(file_name, start_time)
+
+            case MessageTypes.Completed:
+                # When the files are completed, mark it as completed
+                file_name = message_data["data"][Key.FileName]
+                end_time = message_data["data"][Key.EndTime]
+                file_size = CurrentState.ToDoList[file_name][ToDoColumns.FileSize]
+
+                self._multi_log.log(
+                    f"{prefix} File Completed: "
+                    f"{file_name} ({file_size_string(file_size)})",
+                    module=self._module_name,
+                    # level=logging.DEBUG,
+                )
+                self.complete_file(file_name, end_time)
+
+            case MessageTypes.IsDeduped:
+                # When the files are completed, mark it as completed
+                file_name = message_data["data"][Key.FileName]
+                self._multi_log.log(
+                    f"{prefix} File Deduped: {file_name}",
+                    module=self._module_name,
+                    # level=logging.DEBUG,
+                )
+                self.set_value(file_name, ToDoColumns.IsDeduped, True)
+
+            case MessageTypes.AddTransmittedChunk:
+                # When the files are completed, mark it as completed
+                file_name = message_data["data"][Key.FileName]
+                chunk = message_data["data"][Key.Chunk]
+                self._multi_log.log(
+                    f"{prefix} Transmitted chunk {chunk} for {file_name}",
+                    module=self._module_name,
+                    # level=logging.DEBUG,
+                )
+                CurrentState.CurrentFileState = States.Transmitting
+                self.append_value(file_name, ToDoColumns.TransmittedChunks, chunk)
+
+                CurrentState.CurrentTransmittedChunks = len(
+                    CurrentState.ToDoList[file_name][ToDoColumns.TransmittedChunks]
+                )
+                CurrentState.ToDoList[CurrentState.CurrentFile][
+                    ToDoColumns.TransmittedChunksCount
+                ] = len(CurrentState.ToDoList[file_name][ToDoColumns.TransmittedChunks])
+                CurrentState.CurrentTransmittedChunks += 1
+                CurrentState.CurrentCompletedChunks += 1
+
+                self.add_to_value(
+                    file_name,
+                    ToDoColumns.TransmittedBytes,
+                    Configuration.default_chunk_size,
+                )
+
+                self.backup_status.signals.update_chunk_progress.emit()
+                self.backup_status.signals.update_stats_box.emit()
+
+            case MessageTypes.AddDedupedChunk:
+                # When the files are completed, mark it as completed
+                file_name = message_data["data"][Key.FileName]
+                chunk = message_data["data"][Key.Chunk]
+                self._multi_log.log(
+                    f"{prefix} Deduped chunk {chunk} for {file_name}",
+                    module=self._module_name,
+                    # level=logging.DEBUG,
+                )
+                CurrentState.CurrentFileState = States.Transmitting
+                self.set_value(file_name, ToDoColumns.IsDeduped, True)
+                self.append_value(file_name, ToDoColumns.DedupedChunks, chunk)
+                CurrentState.CurrentDedupedChunks += 1
+                CurrentState.CurrentCompletedChunks += 1
+
+                CurrentState.ToDoList[CurrentState.CurrentFile][
+                    ToDoColumns.DedupedChunksCount
+                ] = len(CurrentState.ToDoList[file_name][ToDoColumns.DedupedChunks])
+
+                self.add_to_value(
+                    file_name,
+                    ToDoColumns.DedupedBytes,
+                    Configuration.default_chunk_size,
+                )
+
+                self.backup_status.signals.update_chunk_progress.emit()
+                self.backup_status.signals.update_stats_box.emit()
+
+            case MessageTypes.AddPreparedChunk:
+                # When the files are completed, mark it as completed
+                file_name = message_data["data"][Key.FileName]
+                chunk = message_data["data"][Key.Chunk]
+                self._multi_log.log(
+                    f"{prefix} Prepared chunk {chunk} for {file_name}",
+                    module=self._module_name,
+                    # level=logging.DEBUG,
+                )
+                CurrentState.CurrentFileState = States.Preparing
+                self.append_value(file_name, ToDoColumns.PreparedChunks, chunk)
+
+                CurrentState.ToDoList[CurrentState.CurrentFile][
+                    ToDoColumns.PreparedChunksCount
+                ] = len(CurrentState.ToDoList[file_name][ToDoColumns.PreparedChunks])
+
+                self.add_to_value(
+                    file_name,
+                    ToDoColumns.PreparedBytes,
+                    Configuration.default_chunk_size,
+                )
+
+                self.backup_status.signals.update_chunk_progress.emit()
+
+            case _:
+                self._multi_log.log(
+                    f"Received unexpected message: {message_data}",
+                    module=self._module_name,
+                    level=logging.WARN,
+                )
+
+    def post_initialize_to_do_list(self, file_name: str):
+        index_count = self.to_do_list.at[file_name, ToDoColumns.IndexCount]
+        self.to_do_list[ToDoColumns.State] = self.to_do_list.apply(
+            lambda row: (
+                Key.PreCompleted
+                if row[ToDoColumns.IndexCount] < index_count
+                else (
+                    Key.Skipped
+                    if row[ToDoColumns.State] == Key.Skipped
+                    else Key.Unprocessed
+                )
+            ),
+            axis=1,
+        )
+
+        self.update_stats()
+
+        self.backup_status.signals.go_to_current_row.emit()
+
+    @pyqtSlot()
+    def update_to_do_list(self):
+        current_index = self.to_do_list.at[
+            CurrentState.CurrentFile, ToDoColumns.IndexCount
+        ]
+        self.to_do_list[ToDoColumns.State] = self.to_do_list.apply(
+            lambda row: (
+                Key.Skipped
+                if row[ToDoColumns.IndexCount] < current_index
+                and row[ToDoColumns.State] == Key.Unprocessed
+                else row[ToDoColumns.State]
+            ),
+            axis=1,
+        )
+        # skipped = self.to_do_list[
+        #     (self.to_do_list[ToDoColumns.IndexCount] < current_index)
+        #     & (self.to_do_list[ToDoColumns.State] == Key.Unprocessed)
+        # ]
+        # for filename in skipped.index:
+        #     self.set_value(filename, ToDoColumns.State, Key.Skipped)
+        self.update_stats()
+
+    def update_stats(self):
+        CurrentState.TotalFilesPreCompleted = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.PreCompleted][
+                ToDoColumns.IndexCount
+            ].count()
+        )
+        CurrentState.TotalBytesPreCompleted = float(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.PreCompleted][
+                ToDoColumns.FileSize
+            ].sum()
+        )
+        CurrentState.TotalChunksPreCompleted = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.PreCompleted][
+                ToDoColumns.ChunkCount
+            ].sum()
+        )
+
+        CurrentState.SkippedFiles = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Skipped][
+                ToDoColumns.IndexCount
+            ].count()
+        )
+        CurrentState.SkippedBytes = float(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Skipped][
+                ToDoColumns.FileSize
+            ].sum()
+        )
+        CurrentState.SkippedChunks = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Skipped][
+                ToDoColumns.ChunkCount
+            ].sum()
+        )
+
+        CurrentState.RemainingFiles = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Unprocessed][
+                ToDoColumns.IndexCount
+            ].count()
+        )
+        CurrentState.RemainingBytes = float(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Unprocessed][
+                ToDoColumns.FileSize
+            ].sum()
+        )
+        CurrentState.RemainingChunks = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Unprocessed][
+                ToDoColumns.ChunkCount
+            ].sum()
+        )
+
+        self.total_files = int(self.to_do_list[ToDoColumns.IndexCount].count())
+        # self.backblaze_redis.total_files = self.total_files
+        CurrentState.TotalFiles = self.total_files
+
+        self.total_bytes = float(self.to_do_list[ToDoColumns.FileSize].sum())
+        # self.backblaze_redis.total_size = self.total_bytes
+        CurrentState.TotalBytes = self.total_bytes
+
+        CurrentState.TotalChunks = int(self.to_do_list[ToDoColumns.ChunkCount].sum())
+
+        self.total_files_to_process = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Unprocessed][
+                ToDoColumns.IndexCount
+            ].count()
+        )
+        # self.backblaze_redis.total_files_to_process = self.total_files_to_process
+        CurrentState.TotalFilesToProcess = self.total_files_to_process
+
+        self.total_bytes_to_process = float(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Unprocessed][
+                ToDoColumns.FileSize
+            ].sum()
+        )
+        # self.backblaze_redis.total_size_to_process = self.total_bytes_to_process
+        CurrentState.TotalBytesToProcess = self.total_bytes_to_process
+
+        CurrentState.ToDoList = self.to_do_list.to_dict(orient="index")
+        CurrentState.ToDoListLength = self.to_do_list.shape[0]
+
+    def start_new_file(self, file_name: str, start_time: datetime) -> None:
+        if self.previous_file is not None and self.previous_file != file_name:
+            self.complete_file(self.previous_file, datetime.now())
+
+        self.previous_file = file_name
+        self.set_value(file_name, ToDoColumns.StartTime, start_time)
+        self.set_value(file_name, ToDoColumns.IsDeduped, False)
+
+        CurrentState.CurrentFile = file_name
+        CurrentState.CurrentTransmittedChunks = 0
+        CurrentState.CurrentDedupedChunks = 0
+        CurrentState.CurrentCompletedChunks = 0
+
+        self.backup_status.signals.go_to_current_row.emit()
+        self.backup_status.signals.start_new_file.emit(file_name)
+
+    def complete_file(self, file_name: str, end_time: datetime):
+        self.update_to_do_list()
+
+        if self.previous_file is not None and self.previous_file == file_name:
+            self.previous_file = None
+        self.set_value(file_name, ToDoColumns.EndTime, end_time)
+        self.set_value(file_name, ToDoColumns.State, Key.Completed)
+
+        deduped_chunks = CurrentState.ToDoList[file_name][ToDoColumns.DedupedChunks]
+        self.set_value(
+            file_name,
+            ToDoColumns.DedupedChunksCount,
+            len(deduped_chunks),
+        )
+        transmitted_chunks = CurrentState.ToDoList[file_name][
+            ToDoColumns.TransmittedChunks
+        ]
+        self.set_value(
+            file_name,
+            ToDoColumns.TransmittedChunksCount,
+            len(transmitted_chunks),
+        )
+        if len(deduped_chunks) + len(transmitted_chunks) > 0:
+            if len(deduped_chunks) > len(transmitted_chunks):
+                deduped = True
+            else:
+                deduped = False
+
+            self.set_value(
+                file_name,
+                ToDoColumns.IsDeduped,
+                deduped,
+            )
+
+        CurrentState.CompletedFiles = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Completed][
+                ToDoColumns.IndexCount
+            ].count()
+        )
+
+        CurrentState.CompletedBytes = float(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Completed][
+                ToDoColumns.FileSize
+            ].sum()
+        )
+
+        CurrentState.CompletedChunks = int(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Completed][
+                ToDoColumns.ChunkCount
+            ].sum()
+        )
+
+        CurrentState.TransmittedFiles = int(
+            self.to_do_list[
+                (self.to_do_list[ToDoColumns.IsDeduped] == False)
+                & (self.to_do_list[ToDoColumns.State] == Key.Completed)
+            ][ToDoColumns.FileSize].count()
+        )
+
+        CurrentState.TransmittedBytes = float(
+            self.to_do_list[
+                (self.to_do_list[ToDoColumns.IsDeduped] == False)
+                & (self.to_do_list[ToDoColumns.State] == Key.Completed)
+            ][ToDoColumns.FileSize].sum()
+        )
+
+        CurrentState.TransmittedChunks = float(
+            self.to_do_list[ToDoColumns.TransmittedChunksCount].sum()
+        )
+
+        CurrentState.DuplicateFiles = int(
+            self.to_do_list[
+                (self.to_do_list[ToDoColumns.IsDeduped] == True)
+                & (self.to_do_list[ToDoColumns.State] == Key.Completed)
+            ][ToDoColumns.IsDeduped].count()
+        )
+
+        CurrentState.DuplicateBytes = float(
+            self.to_do_list[
+                (self.to_do_list[ToDoColumns.IsDeduped] == True)
+                & (self.to_do_list[ToDoColumns.State] == Key.Completed)
+            ][ToDoColumns.FileSize].sum()
+        )
+
+        CurrentState.DuplicateChunks = float(
+            self.to_do_list[ToDoColumns.DedupedChunksCount].sum()
+        )
+
+        # Calculate Progress
+
+        start_time = CurrentState.StartTime
+        completed_files = (
+            CurrentState.CompletedFiles
+            + CurrentState.TotalFilesPreCompleted
+            + CurrentState.SkippedFiles
+        )
+        completed_bytes = (
+            CurrentState.CompletedBytes
+            + CurrentState.TotalBytesPreCompleted
+            + CurrentState.SkippedBytes
+        )
+        completed_chunks = (
+            CurrentState.CompletedChunks
+            + CurrentState.TotalChunksPreCompleted
+            + CurrentState.SkippedChunks
+        )
+
+        remaining_size = float(
+            self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.Unprocessed][
+                ToDoColumns.FileSize
+            ].sum()
+        )
+
+        # Calculate percentages
+
+        if self.total_files == 0:
+            CurrentState.CompletedFilesPercentage = 0.0
+        else:
+            CurrentState.CompletedFilesPercentage = (
+                completed_files / CurrentState.TotalFiles
+            )
+
+        if self.total_bytes == 0:
+            CurrentState.CompletedBytesPercentage = 0.0
+        else:
+            CurrentState.CompletedBytesPercentage = (
+                completed_bytes / CurrentState.TotalBytes
+            )
+
+        if CurrentState.TotalChunks == 0:
+            CurrentState.CompletedChunksPercentage = 0.0
+        else:
+            CurrentState.CompletedChunksPercentage = (
+                completed_chunks / CurrentState.TotalChunks
+            )
+
+        # Calculate Rate
+
+        now = datetime.now()
+        seconds_difference = (now - start_time).total_seconds()
+        if seconds_difference == 0:
+            CurrentState.Rate = 0.0
+        else:
+            CurrentState.Rate = CurrentState.CompletedBytes / seconds_difference
+
+        # Calculate time remaining
+
+        if CurrentState.Rate == 0:
+            CurrentState.TimeRemaining = 0
+        else:
+            CurrentState.TimeRemaining = remaining_size / CurrentState.Rate
+            try:
+                CurrentState.EstimatedCompletionTime = now + timedelta(
+                    seconds=CurrentState.TimeRemaining
+                )  # .strftime("%a %m/%d %-I:%M %p")
+            except OverflowError:
+                CurrentState.EstimatedCompletionTime = None
+
+        self.backup_status.data_model_table.resizeRowToContents(
+            CurrentState.ToDoList[file_name][ToDoColumns.IndexCount]
+        )
+
+        self.backup_status.signals.update_stats_box.emit()
+
+    def set_value(self, file_name: str, column: str, value):
+        try:
+            self.to_do_list.at[file_name, column] = value
+            CurrentState.ToDoList[file_name][column] = value
+        except KeyError:
+            # If it's a bad filename, I'm just going to ignore it
+            pass
+
+    def append_value(self, file_name: str, column: str, value):
+        try:
+            self.to_do_list.at[file_name, column].add(value)
+            CurrentState.ToDoList[file_name][column].add(value)
+        except Exception as exp:
+            pass
+
+    def add_to_value(self, file_name: str, column: str, value):
+        self.to_do_list.at[file_name, column] += value
+        CurrentState.ToDoList[file_name][column] += value
 
     def _mark_backup_not_running(self):
         self._multi_log.log("Backup Complete")
-        self._backup_running = False
-        self._to_do_file_list.clear()
-        self.current_file = None
-        self._starting_file = None
-        self._starting_index = 0
+        CurrentState.BackupRunning = False
+        CurrentState.CurrentFile = None
         self.backup_status.signals.backup_running.emit(False)
-        self.backup_status.signals.files_updated.emit()
 
     def get_to_do_file(self) -> str:
         """
@@ -255,512 +770,3 @@ class ToDoFiles(QObject):
             else:
                 break
         return to_do_file
-
-    @property
-    def current_file(self) -> BackupFile:
-        """
-        Return the file currently being backed up
-        """
-        return self._current_file
-
-    @current_file.setter
-    def current_file(self, value: BackupFile) -> None:
-        """
-        Set the file that is currently being backed up
-        """
-        self.lock.lockForWrite()
-        self._current_file = value
-        self.lock.unlock()
-
-    @property
-    def to_do_file_list(self) -> BackupFileList:  #  list[BackupFile]:
-        """
-        Return all the files that are remaining on the to_do list
-        """
-        # return self._to_do_file_list.file_list
-        return self._to_do_file_list
-
-    def get_file(self, filename: str) -> Optional[BackupFile]:
-        """
-        Get the backup file with the given filename
-        """
-        self.lock.lockForRead()
-        result = self._to_do_file_list.get(filename)
-        self.lock.unlock()
-        return result
-
-    def exists(self, filename: str) -> bool:
-        """
-        Returns whether the file is in the list
-        :param filename:
-        :return:
-        """
-
-        self.lock.lockForRead()
-        result = filename in self._to_do_file_list.file_dict
-        self.lock.unlock()
-
-        return result
-
-    # No one is using this function
-    # def get_index(self, filename) -> int:
-    #     if filename in self._file_dict:
-    #         return self._file_dict[filename].list_index
-    #     else:
-    #         raise NotFound
-
-    def mark_completed(self, filename: str) -> None:
-        self.signal_mark_completed.emit(filename)
-        debug_print(f"emitted mark_completed({filename})")
-
-    @pyqtSlot(str)
-    def _mark_completed(self, filename: str) -> None:
-        """
-        Mark a file as completed
-
-        :param filename:
-        :return:
-        """
-        debug_print(f"received mark_completed({filename})")
-
-        completed_file: BackupFile = self.get_file(filename)
-        if completed_file is None:
-            raise CompletedFileNotFound
-
-        if self._starting_file is None:
-            self._starting_file = completed_file
-            self._starting_index = self._to_do_file_list.file_list.index(completed_file)
-
-        self.lock.lockForWrite()
-
-        completed_file.completed = True
-        completed_file.end_time = datetime.now()
-        completed_file.completed_run = self._current_run
-
-        if completed_file.start_time is not None:
-            completion_time = (
-                completed_file.end_time - completed_file.start_time
-            ).seconds
-            if completion_time == 0:
-                completed_file.rate = ""
-            else:
-                completed_file.rate = (
-                    f"{file_size_string(completed_file.file_size / completion_time)}"
-                    f" / sec"
-                )
-
-        if completed_file.is_large_file:
-            chunk_duplicate_percentage = (
-                completed_file.deduped_count / completed_file.total_chunk_count
-            )
-            if chunk_duplicate_percentage > 0.75:
-                completed_file.is_deduped_chunks = True
-
-        # Put completed items on the completed file list
-
-        self._completed_file_list.append(completed_file)
-        self.lock.unlock()
-
-        self.backup_status.signals.calculate_progress.emit()
-        self.backup_status.signals.files_updated.emit()
-        self.backup_status.reposition_table()
-
-    def add_file(self, filename: str, is_chunk: bool = False):
-        self.signal_add_file.emit(filename, is_chunk)
-
-    @pyqtSlot(str, bool)
-    def _add_file(
-        self,
-        filename: str,
-        is_chunk: bool = False,
-    ):
-        """
-        Add a file that isn't on the to_do list
-        """
-        if not self.exists(filename):
-            filename_path = Path(filename)
-            self.lock.lockForWrite()
-            try:
-                _stat = filename_path.stat()
-                file_size = _stat.st_size
-            except:
-                file_size = 0
-
-            backup_file = BackupFile(
-                filename_path,
-                file_size,
-            )
-
-            # file_size > self.default_chunk_size:
-            # this is the size of the backblaze chunks
-            if is_chunk:
-                backup_file.total_chunk_count = int(
-                    file_size / Configuration.default_chunk_size
-                )
-                backup_file.is_large_file = True
-
-            self._to_do_file_list.append(backup_file)
-            self.lock.unlock()
-
-    @property
-    def completed_files(self) -> list:
-        return self._completed_file_list.file_list
-
-    @property
-    def backup_running(self) -> bool:
-        return self._backup_running
-
-    @property
-    def remaining_size(self) -> int:
-        to_do_index = self._get_to_do_index()
-        size = sum(
-            backup_file.file_size
-            for backup_file in self._to_do_file_list.file_list[to_do_index:]
-        )
-        return size
-
-    def remaining_file_count(self) -> int:
-        to_do_index = self._get_to_do_index()
-        files = len(self._to_do_file_list.file_list[to_do_index:])
-        return files
-
-    # @property
-    # def remaining_files(self) -> list:
-    #     return self._file_list
-
-    def _get_to_do_index(self):
-        if self.current_file is not None:
-            return self._to_do_file_list.index(str(self.current_file.file_name))
-
-        if len(self._completed_file_list) == 0:
-            return 0
-
-        last_completed: BackupFile = self._completed_file_list[-1]
-        try:
-            index = self._to_do_file_list.file_list.index(last_completed)
-            return index + 1
-        except ValueError:
-            return 0
-
-    @property
-    def total_size(self) -> int:
-        with Lock.DB_LOCK:
-            size = sum(
-                backup_file.file_size for backup_file in self._to_do_file_list.file_list
-            )
-
-        return size
-
-    @property
-    def total_large_size(self) -> int:
-        with Lock.DB_LOCK:
-            size = sum(
-                backup_file.file_size
-                for backup_file in self._to_do_file_list.file_list
-                if backup_file.is_large_file
-            )
-
-        return size
-
-    @property
-    def total_current_large_size(self) -> int:
-        with Lock.DB_LOCK:
-            size = sum(
-                backup_file.file_size
-                for backup_file in self._to_do_file_list.file_list[
-                    self._starting_index :
-                ]
-                if backup_file.is_large_file
-            )
-
-        return size
-
-    @property
-    def total_regular_size(self) -> int:
-        with Lock.DB_LOCK:
-            size = sum(
-                backup_file.file_size
-                for backup_file in self._to_do_file_list.file_list
-                if not backup_file.is_large_file
-            )
-
-        return size
-
-    @property
-    def total_current_regular_size(self) -> int:
-        with Lock.DB_LOCK:
-            size = sum(
-                backup_file.file_size
-                for backup_file in self._to_do_file_list.file_list[
-                    self._starting_index :
-                ]
-                if not backup_file.is_large_file
-            )
-
-        return size
-
-    @property
-    def total_file_count(self) -> int:
-        with Lock.DB_LOCK:
-            file_count = len(self._to_do_file_list.file_list)
-            return file_count
-
-    @property
-    def total_large_file_count(self) -> int:
-        files = sum(
-            [
-                1
-                for backup_file in self._to_do_file_list.file_list
-                if backup_file.is_large_file
-            ]
-        )
-        return files
-
-    @property
-    def total_current_large_file_count(self) -> int:
-        files = sum(
-            [
-                1
-                for backup_file in self._to_do_file_list.file_list[
-                    self._starting_index :
-                ]
-                if backup_file.is_large_file
-            ]
-        )
-        return files
-
-    @property
-    def total_chunk_count(self) -> int:
-        chunks = sum(
-            backup_file.total_chunk_count
-            for backup_file in self._to_do_file_list.file_list
-        )
-        return chunks
-
-    @property
-    def total_current_chunk_count(self) -> int:
-        chunks = sum(
-            backup_file.total_chunk_count
-            for backup_file in self._to_do_file_list.file_list[self._starting_index :]
-        )
-        return chunks
-
-    @property
-    def total_regular_file_count(self) -> int:
-        return sum(
-            [
-                1
-                for backup_file in self._to_do_file_list.file_list
-                if not backup_file.is_large_file
-            ]
-        )
-
-    @property
-    def total_current_regular_file_count(self) -> int:
-        files = sum(
-            [
-                1
-                for backup_file in self._to_do_file_list.file_list[
-                    self._starting_index :
-                ]
-                if not backup_file.is_large_file
-            ]
-        )
-        return files
-
-    @property
-    def completed_file_count(self) -> int:
-        if self._to_do_file_list is None:
-            return 0
-
-        to_do_index = self._get_to_do_index()
-        return to_do_index + 1
-
-    @property
-    def completed_chunk_count(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        chunks = sum(
-            len(backup_file.transmitted_chunks) + len(backup_file.deduped_chunks)
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.is_large_file
-            and backup_file.completed_run == self._current_run
-        )
-        return chunks
-
-    @property
-    def completed_size(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        size = sum(
-            backup_file.file_size
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.completed_run == self._current_run
-        )
-        return size
-
-    @property
-    def processed_size(self) -> int:
-        if self._to_do_file_list is None:
-            return 0
-
-        to_do_index = self._get_to_do_index()
-        size = sum(
-            backup_file.file_size
-            for backup_file in self._to_do_file_list.file_list[0:to_do_index]
-        )
-        return size
-
-    @property
-    def processed_file_count(self) -> int:
-        if self._to_do_file_list is None:
-            return 0
-
-        to_do_index = self._get_to_do_index()
-        return to_do_index + 1
-
-    @property
-    def completed_chunk_size(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        size = sum(
-            (len(backup_file.transmitted_chunks) * Configuration.default_chunk_size)
-            + (len(backup_file.deduped_chunks) * Configuration.default_chunk_size)
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.is_large_file
-            and backup_file.completed_run == self._current_run
-        )
-        return size
-
-    @property
-    def transmitted_size(self) -> int:
-        return self.transmitted_file_size + self.transmitted_chunk_size
-
-    @property
-    def transmitted_file_size(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        size = sum(
-            backup_file.file_size
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.completed_run == self._current_run
-            and not backup_file.is_large_file
-            and not backup_file.is_deduped
-        )
-        return size
-
-    @property
-    def transmitted_chunk_size(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        size = sum(
-            len(backup_file.transmitted_chunks) * Configuration.default_chunk_size
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.is_large_file
-            and backup_file.completed_run == self._current_run
-        )
-
-        return size
-
-    @property
-    def transmitted_file_count(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        files = sum(
-            1
-            for backup_file in self._completed_file_list.file_list
-            if not backup_file.is_deduped
-            and backup_file.completed_run == self._current_run
-            and not backup_file.is_large_file
-        )
-        return files
-
-    @property
-    def transmitted_chunk_count(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        files = sum(
-            len(backup_file.transmitted_chunks)
-            for backup_file in self._completed_file_list.file_list
-            if not backup_file.is_deduped
-            and backup_file.completed_run == self._current_run
-        )
-        return files
-
-    @property
-    def duplicate_size(self) -> int:
-        return self.duplicate_file_size + self.duplicate_chunk_size
-
-    @property
-    def duplicate_file_size(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        size = sum(
-            backup_file.file_size
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.completed_run == self._current_run
-            and backup_file.is_deduped
-            and not backup_file.is_large_file
-        )
-
-        return size
-
-    @property
-    def duplicate_chunk_size(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        size = sum(
-            len(backup_file.deduped_chunks) * Configuration.default_chunk_size
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.is_large_file
-            and backup_file.completed_run == self._current_run
-        )
-        return size
-
-    @property
-    def duplicate_file_count(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        files = sum(
-            1
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.is_deduped
-            and backup_file.completed_run == self._current_run
-            and not backup_file.is_large_file
-        )
-        return files
-
-    @property
-    def duplicate_chunk_count(self) -> int:
-        if self._completed_file_list is None:
-            return 0
-
-        chunks = sum(
-            len(backup_file.deduped_chunks)
-            for backup_file in self._completed_file_list.file_list
-            if backup_file.is_large_file
-            and backup_file.completed_run == self._current_run
-        )
-        return chunks
-
-    @property
-    def completed_file_list(self) -> BackupFileList:
-        return self._completed_file_list
-
-    @property
-    def current_run(self) -> int:
-        return self._current_run
-
-    @property
-    def starting_index(self) -> int:
-        return self._starting_index
