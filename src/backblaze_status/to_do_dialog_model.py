@@ -13,12 +13,20 @@ from .utils import file_size_string
 
 
 class ColumnNames(IntEnum):
+    """
+    Enumeration of column names
+    """
+
     FILE_SIZE = 0
     FILE_NAME = 1
     TOTAL_BACKUP_SIZE = 2
 
 
 class RowType(Enum):
+    """
+    Enumeration of row types
+    """
+
     TRANSMITTED = auto()
     CURRENT = auto()
     COMPLETED = auto()
@@ -26,6 +34,7 @@ class RowType(Enum):
     DUPLICATED = auto()
     PREVIOUS_RUN = auto()
     UNKNOWN = auto()
+    SKIPPED = auto()
 
 
 @dataclass
@@ -50,7 +59,7 @@ class ToDoDialogModel(QAbstractTableModel):
         RowType.TO_DO: QColor("grey"),
         RowType.DUPLICATED: QColor("orange"),
         RowType.PREVIOUS_RUN: QColor("magenta"),
-        RowType.UNKNOWN: QColor("mediumslateblue"),
+        RowType.SKIPPED: QColor("darkMagenta"),
     }
 
     def __init__(self, backup_status):
@@ -58,12 +67,6 @@ class ToDoDialogModel(QAbstractTableModel):
 
         super(ToDoDialogModel, self).__init__()
         self.backup_status: QTBackupStatus = backup_status
-
-        #        self.fixed_font = QFont(".SF NS Mono")
-
-        # self.display_cache: List[ToDoDialogFile] = []
-        # self.update_display_cache()
-        # self.current_index: int = 0
 
         self.column_names = [
             "File Size",
@@ -102,6 +105,7 @@ class ToDoDialogModel(QAbstractTableModel):
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         row = index.row()
         column = index.column()
+
         try:
             file_name = CurrentState.FileIndex[row]
             row_data = CurrentState.ToDoList[file_name]
@@ -139,15 +143,16 @@ class ToDoDialogModel(QAbstractTableModel):
                 if row_data[ToDoColumns.State] == Key.Completed:
                     return self.RowForegroundColors[RowType.COMPLETED]
 
+                if row_data[ToDoColumns.State] == Key.Skipped:
+                    return self.RowForegroundColors[RowType.SKIPPED]
+
                 return self.RowForegroundColors[RowType.TO_DO]
 
             case Qt.ItemDataRole.TextAlignmentRole:
                 return self.column_alignment[column]
 
             case Qt.ItemDataRole.BackgroundRole:
-                # if self.row_type(row) == RowType.PREVIOUS_RUN:
-                #     return QColor("PowderBlue")
-
+                # Mark the currently processing line with a different background
                 if file_name == CurrentState.CurrentFile:
                     return QColor("papayawhip")
 
@@ -155,59 +160,3 @@ class ToDoDialogModel(QAbstractTableModel):
 
             case _:
                 return
-
-    # def update_display_cache(self):
-    #     if self.to_do is None:
-    #         return
-    #
-    #     result_list = []
-    #     total_backup_size = 0
-    #     for index, file in enumerate(
-    #         self.to_do.to_do_file_list
-    #     ):  # type: int, BackupFile
-    #         total_backup_size += file.file_size
-    #         to_do_file = ToDoDialogFile(
-    #             index, file.file_size, str(file.file_name), total_backup_size
-    #         )
-    #         result_list.append(to_do_file)
-    #     self.display_cache = result_list
-    #
-    #     if self.to_do.current_file is None:
-    #         self.current_index = 0
-    #     else:
-    #         current_index_item = self.to_do.to_do_file_list.file_dict.get(
-    #             str(self.to_do.current_file.file_name)
-    #         )
-    #         if current_index_item is None:
-    #             self.current_index = 0
-    #         else:
-    #             self.current_index = self.to_do.to_do_file_list.file_list.index(
-    #                 current_index_item
-    #             )
-    #     self.layoutChanged.emit()
-    #
-    # def row_type(self, row: int, row_data: Optional[BackupFile] = None) -> RowType:
-    #     if self.to_do is None:
-    #         return RowType.UNKNOWN
-    #
-    #     if (
-    #         row_data is not None
-    #         and row_data.completed_run != 0
-    #         and row_data.completed_run != self.to_do.current_run
-    #     ):
-    #         return RowType.PREVIOUS_RUN
-    #
-    #     if (
-    #         row_data is not None
-    #         and row_data.completed_run == 0
-    #         and row < self.current_index
-    #     ):
-    #         return RowType.UNKNOWN
-    #
-    #     if row_data is not None and (row_data.is_deduped or row_data.is_deduped_chunks):
-    #         return RowType.DUPLICATED
-    #
-    #     if row < self.current_index:
-    #         return RowType.TRANSMITTED
-    #
-    #     return RowType.TO_DO
