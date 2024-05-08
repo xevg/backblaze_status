@@ -1,3 +1,8 @@
+"""
+These classes provide constants that are used throughout the program
+"""
+
+
 class ToDoColumns:
     FileName: str = "FileName"
     FileSize: str = "FileSize"
