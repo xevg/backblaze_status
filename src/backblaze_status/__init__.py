@@ -2,11 +2,10 @@ import sys
 from importlib.metadata import version
 
 import rich.traceback
-from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon
+from PyQt6.QtWidgets import QApplication
 
 from .qt_backup_status import QTBackupStatus
-
 
 # read version from installed package
 __version__ = version("backblaze_status")
