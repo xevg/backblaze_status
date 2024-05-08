@@ -43,10 +43,6 @@ class BzLastFilesTransmitted:
         self._module_name = self.__class__.__name__
         self._multi_log.log("Starting BzLastFilesTransmitted")
 
-        self.go_to_end = True
-        self.signals = self.backup_status.signals
-        # self.backblaze_redis = BackBlazeRedis()
-
     def get_latest_logfile_name(self) -> Path:
         """
         Scan the log directory for any files that end in .log, and return the one
@@ -54,7 +50,6 @@ class BzLastFilesTransmitted:
 
         :return:
         """
-        # return Path(self.BZ_LOG_DIR) / "28.log"
         last_file = None
         _dir = Path(self.BZ_LOG_DIR)
         for _file in _dir.iterdir():
@@ -66,7 +61,11 @@ class BzLastFilesTransmitted:
                         last_file = _file
         return last_file
 
-    def _process_line(self, _line: str, _tell: int) -> None:
+    def _process_line(self, _line: str) -> None:
+        """
+        For each line read, this processes it
+        :param _line: the line to process
+        """
         _filename: str | None = None
         _bytes: int = 0
         _rate: str | None = None
@@ -81,6 +80,7 @@ class BzLastFilesTransmitted:
         else:
             self._total_lines += 1
         if not self._first_pass:
+            # If this is the first pass, don't output the line
             self._multi_log.log(_line, level=logging.DEBUG)
 
         """
@@ -193,16 +193,7 @@ class BzLastFilesTransmitted:
                 print(f"Unrecognized line: {_line}")
                 return
 
-        # At this point we have a filename. I take a look at the timestamp,
-        # because when I start up the monitor,there can be a lot of older information
-        # that I don't care about, so I discard anything over 4 hours old
-
         _datetime = datetime.strptime(_timestamp, "%Y-%m-%d %H:%M:%S")
-
-        # If it's a while ago, don't add it to the to do list
-        now = datetime.now()
-        if (now - _datetime).seconds > 60 * 60 * 4:
-            return
 
         if self._previous_filename is None:
             self._previous_filename = _filename
@@ -215,9 +206,6 @@ class BzLastFilesTransmitted:
                     Key.StartTime: _datetime,
                 },
             )
-
-            # We have started transmitting, so set the marker for that
-            # self.signals.transmitting.emit(_filename)
 
         elif self._previous_filename != _filename:
             # The filename has changed, and we are still transmitting
@@ -286,6 +274,13 @@ class BzLastFilesTransmitted:
         return
 
     def emit_message(self, message_type: str, message_string: str, data: dict) -> None:
+        """
+        A wrapper method that emits a standardized message
+        :param message_type: The message type
+        :param message_string: The message string
+        :param data: The underlying data to transfer
+        """
+
         self.publish_count += 1
         message = {
             "type": message_type,
@@ -297,6 +292,9 @@ class BzLastFilesTransmitted:
         self.backup_status.signals.get_messages.emit(message)
 
     def read_file(self) -> None:
+        """
+        Read a new file
+        """
         _log_file = self.get_latest_logfile_name()
         pre_stat = _log_file.stat()
         self._file_size = pre_stat.st_size
@@ -311,12 +309,13 @@ class BzLastFilesTransmitted:
             else:
                 with _log_file.open("r") as _log_fd:
                     self._multi_log.log(f"Reading file {_log_file}")
+                    # If this is the first time through the file, go to the end of
+                    # the file
                     if self._first_pass:
                         _log_fd.seek(0, 2)
 
                     for _line in self._tail_file(_log_fd):
-                        tell = _log_fd.tell()
-                        self._process_line(_line, tell)
+                        self._process_line(_line)
 
                     self._first_pass = False
                     self._multi_log.log("Finished first pass", module=self._module_name)
@@ -325,6 +324,10 @@ class BzLastFilesTransmitted:
                     self._current_filename = _log_file
 
     def _tail_file(self, _file) -> str:
+        """
+        Continuously reads a file and returns each line
+        :param _file: The file to read
+        """
         while True:
             _line = _file.readline()
 
