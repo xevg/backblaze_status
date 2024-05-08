@@ -1,3 +1,8 @@
+"""
+Custom exceptions for backblaze_status
+"""
+
+
 class CurrentFileNotSet(Exception):
     pass
 
