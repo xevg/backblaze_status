@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
 from icecream import ic
 
 from .constants import Key, MessageTypes
@@ -16,12 +17,17 @@ from .utils import MultiLogger
 
 @dataclass
 class BzPrepare:
+    """
+    This reads the current large file (if it exists) which contains information about
+    all the chunks as it prepares it.
+    """
+
     backup_status: QTBackupStatus
     to_do_files: ToDoFiles | None = field(default=None, init=False)
-    BZ_LOG_DIR: str = field(
+    BZ_TODO_FOR_CHUNKS: str = field(
         default=(
             f"/Library/Backblaze.bzpkg/bzdata/bzbackup/"
-            f"bzdatacenter/bzcurrentlargefile"
+            f"bzdatacenter/bzcurrentlargefile/bz_todo_for_chunks.dat"
         ),
         init=False,
     )
@@ -40,59 +46,13 @@ class BzPrepare:
         # Compile the chunk search regular expression
         self.chunk_search_re = re.compile(r"seq([0-9a-f]+).dat")
 
-    def get_latest_logfile_name(self) -> Path:
-        """
-        Scan the log directory for any files that end in .log, and return the one
-        with the newest modification time
-
-        :return:
-        """
-        return Path(self.BZ_LOG_DIR) / "bz_todo_for_chunks.dat"
-
-    def tail_file(self, _file, log_file: Path):
-        while True:
-            # This log file can be deleted and overwritten, so I need to check if it
-            # still exists, and if it does, make sure that the file isn't shorter
-            # than the last time I checked
-
-            if not log_file.exists():
-                return
-
-            new_size = log_file.stat().st_size
-            if new_size < self.file_size:
-                ic(f"Log file shrank from {self.file_size} to {new_size}")
-                self.file_size = new_size
-                time.sleep(2)
-                continue
-
-            # You can do a select() on sys.stdin, and put a timeout on the select, ie:
-            #
-            # rfds, wfds, efds = select.select( [sys.stdin], [], [], 5)
-            #
-            # would give you a five-second timeout. If the timeout expired, then rfds
-            # would be an empty list. If the user entered something within five
-            # seconds, then rfds will be a list containing sys.stdin.
-
-            readable, _, _ = select.select([_file], [], [], 0.5)
-            if not readable:
-                ic("Waiting for line to become available")
-                # If no new line is available, wait a half second then try again
-                time.sleep(0.5)
-                continue
-
-            # I know there is a line waiting for me, so read it
-            _line = _file.readline()
-            if not _line:
-                ic("No line read")
-                break
-
-            # Save the size of the file, so I can compare it next time
-            self.file_size = log_file.stat().st_size
-            self.process_line(_line)
-
     def read_file(self) -> None:
-        log_file = Path(self.BZ_LOG_DIR) / "bz_todo_for_chunks.dat"
-        previous_file = CurrentState.CurrentFile
+        """
+        Read the file and process each line, restarting when a new file is being
+        processed
+        """
+        log_file = Path(self.BZ_TODO_FOR_CHUNKS)
+        self.previous_file = CurrentState.CurrentFile
         while True:
             ic("Checking if log file exists")
             if not log_file.exists():
@@ -101,10 +61,13 @@ class BzPrepare:
 
             location = 0
             stat = log_file.stat()
-            old_size = stat.st_size
             old_mtime = stat.st_mtime
 
             def file_check():
+                """
+                Check the log file. Return true if it's still the same file,
+                false if the file doesn't exist, or it's a different file
+                """
                 if not log_file.exists():
                     return False
                 ic("Checking if CurrentFile is set")
@@ -113,12 +76,14 @@ class BzPrepare:
                     time.sleep(1)
                     return False
 
-                # I don't want to keep rereading the same file over and over again
+                # I don't want to keep rereading the same file over and over again,
+                # so check to see if it is the same file
                 ic("Checking if filename has changed")
                 if CurrentState.CurrentFile == self.previous_file:
                     time.sleep(1)
                     return True
 
+                # At this point, it's a new file, reread it
                 ic(f"Preparing {CurrentState.CurrentFile}")
                 self.previous_file = CurrentState.CurrentFile
 
@@ -138,18 +103,14 @@ class BzPrepare:
             try:
                 with log_file.open("r") as log_fd:
                     while True:
-                        # self.tail_file(log_fd, log_file)
-                        # Read until the tail returns rather than yields. If it
-                        # returns, then I need to check for a new file, and start again
-
                         if CurrentState.CurrentFile is None:
                             ic("CurrentFile not set")
                             time.sleep(1)
                             continue
 
                         readable, _, _ = select.select([log_fd], [], [], 0.5)
-                        # print(f"readable = {readable}")
                         if not readable:
+                            # If file_check returns false, restart files
                             if file_check():
                                 continue
                             else:
@@ -159,19 +120,22 @@ class BzPrepare:
                             if file_check():
                                 continue
                             else:
-                                # print(f"Restarting {str(log_file)}")
+                                ic(f"Restarting {str(log_file)}")
                                 break
                         location = log_fd.tell()
-                        # print(f"{line}, now at {location}")
                         self.process_line(line)
-                    # I need to make it so that it tries reading the new file
 
             except FileNotFoundError:
                 # This is expected
                 time.sleep(1)
 
     def process_line(self, line: str) -> None:
+        """
+        Process a single line from the BzPrepare
+        :param line: the line to process
+        """
         ic(f"Processing line {line}")
+        # Scan the line
         results = self.chunk_search_re.search(line.strip())
         if results is not None:
             chunk_hex = results.group(1)
