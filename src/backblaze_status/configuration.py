@@ -1,66 +1,20 @@
-from pathlib import Path
-import click
 import configparser
+from pathlib import Path
 
 
 class Configuration:
-    kb_divisor: int = 1024
-    mb_divisor: int = 1024 * kb_divisor
-    gb_divisor: int = 1024 * mb_divisor  # 1000000000
-    tb_divisor: int = 1024 * gb_divisor  # 1000000000000
-    default_chunk_size: int = 10485760
+    """
+    Class to manage the configuration
+    """
 
-    default_feature_flags: dict = {
-        "show_progress_bar": {
-            "usage": "all",
-            "default": True,
-            "help": "Display progress bars",
-        },
-        "show_disk_info": {
-            "usage": "all",
-            "default": True,
-            "help": "Show addition information about the disks",
-        },
-        "show_symlinks": {
-            "usage": "clean",
-            "default": False,
-            "help": "Display information about symlinks",
-        },
-        "show_missing_m4v": {
-            "usage": "clean",
-            "default": True,
-            "help": "Display missing m4v files",
-        },
-        "show_files": {
-            "usage": "clean",
-            "default": False,
-            "help": "Display info about the files",
-        },
-        "show_empty_directories": {
-            "usage": "clean",
-            "default": False,
-            "help": "Display empty directories",
-        },
-        "show_relink_symlinks": {
-            "usage": "clean",
-            "default": False,
-            "help": "Display symlinks that need to be relinked",
-        },
-        "show_bad_symlinks": {
-            "usage": "clean",
-            "default": False,
-            "help": "Display bad symlinks",
-        },
-        "show_bad_files": {
-            "usage": "clean",
-            "default": True,
-            "help": "Display bad files",
-        },
-    }
+    # Standardize some values
+    kb_divisor: int = 1024
+    mb_divisor: int = 1024 * kb_divisor  # 1,048,576
+    gb_divisor: int = 1024 * mb_divisor  # 1,073,741,824
+    tb_divisor: int = 1024 * gb_divisor  # 1,099,511,627,776
+    default_chunk_size: int = 10485760  # 10 MB
 
     def __init__(self, configuration_file: str = None):
-        self.gb_divisor = 1000000000
-        self.tb_divisor = 1000000000000
 
         if configuration_file:
             self.configuration_file: str = configuration_file
@@ -78,14 +32,17 @@ class Configuration:
 
         secondary_disks_string: str = config.get(
             "secondary_disks",
-            fallback="/Volumes/CameraHDD/SecuritySpy, /Volumes/CameraHDD2/SecuritySpy, /Volumes/CameraHDD3/SecuritySpy",
+            fallback="/Volumes/CameraHDD/SecuritySpy,"
+            "/Volumes/CameraHDD2/SecuritySpy,"
+            "/Volumes/CameraHDD3/SecuritySpy,"
+            "/Volumes/CameraHDD4/SecuritySpy",
         )
         self.secondary_disks: list = list()
         for disk in secondary_disks_string.split(","):
             self.secondary_disks.append(Path(disk.strip()))
 
         self.camera_directory_prefix: str = config.get(
-            "camera_directory_prefix", fallback="/Volumes/Camera"
+            "camera_directory_prefix", fallback="/Volumes/CameraCache/SecuritySpy"
         )
         self.logfile_dir: Path = Path(
             config.get("logfile_dir", fallback=f"{Path.home()}/logs")
@@ -121,37 +78,16 @@ free_space_required = {self.free_space_required}
 """
 
         self.free_space_required = self.free_space_required * self.gb_divisor
-
         self.configuration = self.initialize_configuration()
-
-        self.available_features: str = """
-\b
-"""
-        for key in self.default_feature_flags.keys():
-            if self.default_feature_flags[key]["usage"] == "all":
-                self.available_features += (
-                    f"     {click.style(key, fg='bright_red')}:"
-                    f" {self.default_feature_flags[key]['help']}\n"
-                )
-        self.available_features += f"\n\n"
-
-        self.available_clean_features: str = """
-\b
-"""
-        for key in self.default_feature_flags.keys():
-            if (
-                self.default_feature_flags[key]["usage"] == "all"
-                or self.default_feature_flags[key]["usage"] == "clean"
-            ):
-                self.available_clean_features += (
-                    f"     {click.style(key, fg='bright_red')}:"
-                    f" {self.default_feature_flags[key]['help']}\n"
-                )
-        self.available_clean_features += f"\n\n"
 
     def initialize_configuration(
         self, new_configuration_file: str = None
     ) -> configparser.ConfigParser:
+        """
+        Initialize the configuration. If the configuration file does not exist,
+        it will be created.
+        :param new_configuration_file: The configuration file
+        """
         if not new_configuration_file:
             new_configuration_file = self.configuration_file
 
