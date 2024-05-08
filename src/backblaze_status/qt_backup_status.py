@@ -294,8 +294,9 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         """
         Go to the top of the table
         """
-        self.data_model_table.selectRow(0)
-        self.data_model_table.scrollTo(self.result_data.index(0, 0))
+        self.data_model_table.clearSelection()
+        self.display_moved = False
+        self.result_data.go_to_top()
         self.data_model_table.resizeRowsToContents()
 
     @pyqtSlot()

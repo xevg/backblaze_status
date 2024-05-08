@@ -14,6 +14,10 @@ from .utils import file_size_string
 
 
 class ColumnNames(IntEnum):
+    """
+    Enumeration of column names.
+    """
+
     TIMESTAMP = 0
     FILE_NAME = 1
     CHUNKS_PREPARED = 2
@@ -25,6 +29,10 @@ class ColumnNames(IntEnum):
 
 
 class RowType(Enum):
+    """
+    Enumeration of row types.
+    """
+
     COMPLETED = auto()
     CURRENT = auto()
     TO_DO = auto()
@@ -36,13 +44,12 @@ class RowType(Enum):
 
 class BzDataTableModel(QAbstractTableModel):
     """
-
     There are two data tables used for the display, the first one is the BackupResult
     list of what has been backed up, and the second is the ToDoFile list of what
     will be backed up
     """
 
-    ToDoDisplayCount: int = 52
+    # Map colors to row type
     RowForegroundColors: dict[RowType, QColor] = {
         RowType.COMPLETED: QColor("white"),
         RowType.CURRENT: QColor("green"),
@@ -52,24 +59,36 @@ class BzDataTableModel(QAbstractTableModel):
         RowType.SKIPPED: QColor("darkMagenta"),
     }
 
-    def __init__(self, backup_status, batch_size=25, max_nodes=200):
+    def __init__(self, backup_status, batch_size=25, max_rows=200):
+        """
+        :param backup_status: a link the backup_status class, so that I can access
+        the signals
+        :param batch_size: how many rows I add (or remove) at a time
+        :param max_rows: the maximum number of rows I can have at a time
+        """
+        # To avoid circular dependencies, import this here
         from .qt_backup_status import QTBackupStatus
 
         super(BzDataTableModel, self).__init__()
         self.backup_status: QTBackupStatus = backup_status
         self.batch_size: int = batch_size
-        self.max_nodes: int = max_nodes
+        self.max_rows: int = max_rows
 
+        # In order to minimize the data in the table, and avoid slowdown of the
+        # display, I manage a window of data. start_index and end_index are the
+        # boundaries of the window.
+        # For end_index, I want the minimum of either length of the list, since I
+        # don't want to have more rows than list size, or the batch_size, which is
+        # the number of rows to add at a time.
         self.start_index: int = 0
         self.end_index: int = min(CurrentState.ToDoListLength, batch_size)
 
+        # Update the interval time, which I want to do every second
         self.interval_timer = QTimer()
         self.interval_timer.timeout.connect(self.update_interval)
         self.interval_timer.start(1000)
 
-        self.batch_size: int = batch_size
-        self.max_nodes: int = max_nodes
-
+        # Connect to signals
         self.backup_status.signals.to_do_available.connect(self.to_do_loaded)
         self.backup_status.signals.go_to_current_row.connect(self.go_to_current_row)
 
@@ -84,6 +103,7 @@ class BzDataTableModel(QAbstractTableModel):
             "Rate",
         ]
 
+        # Map the column names to the ToDoColumns
         self.source_column_names = [
             ToDoColumns.StartTime,
             ToDoColumns.FileName,
@@ -95,6 +115,7 @@ class BzDataTableModel(QAbstractTableModel):
             ToDoColumns.Rate,
         ]
 
+        # Alignment per column
         self.column_alignment = [
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
@@ -108,11 +129,19 @@ class BzDataTableModel(QAbstractTableModel):
 
     @pyqtSlot()
     def to_do_loaded(self):
+        """
+        When I get a signal that the To Do file has been loaded, then I have to
+        reload the whole table, which means I have to start at the top
+        """
         self.start_index = 0
         self.end_index = min(CurrentState.ToDoListLength, self.batch_size)
         self.layoutChanged.emit()
 
     def rowCount(self, index: QModelIndex) -> int:
+        """
+        The row count is the end_index - start_index. If they are the same,
+        then reset the table
+        """
         row_count = self.end_index - self.start_index
         if row_count == 0:
             self.start_index = 0
@@ -134,25 +163,27 @@ class BzDataTableModel(QAbstractTableModel):
                     case Qt.Orientation.Horizontal:
                         return self.column_names[section]
                     case _:
+                        # For the vertical header, rather than the row number of what
+                        # is displayed, I want the row number of the actual to do file.
                         row_num = f"{self.start_index + section + 1:,}"
                         return row_num
             case _:
                 return
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
+        # The row is the requested row plus the start_index, which gives me the
+        # actual row from the to do list
         row = index.row() + self.start_index
         column = index.column()
 
         try:
+            # If the row isn't on the list for some reason, return a blank line
             file_name = CurrentState.FileIndex[row]
             row_data = CurrentState.ToDoList[file_name]
         except KeyError:
             return
 
         match role:
-            # case Qt.ItemDataRole.FontRole:
-            #     return self.fixed_font
-
             case Qt.ItemDataRole.TextAlignmentRole:
                 return self.column_alignment[column]
 
@@ -235,15 +266,6 @@ class BzDataTableModel(QAbstractTableModel):
                         result = row_data[ToDoColumns.FileSize] / time_difference
                         return f"{file_size_string(result)} / sec"
 
-                    # case ToDoColumns.IsDeduped:
-                    #     deduped = row_data[ToDoColumns.IsDeduped]
-                    #     if deduped.isna():
-                    #         return False
-                    #     else:
-                    #         return deduped
-                    # case _:
-                    #     return str(row_data[self.source_column_names[column]])
-
             case Qt.ItemDataRole.ForegroundRole:
                 if file_name == CurrentState.CurrentFile:
                     return self.RowForegroundColors[RowType.CURRENT]
@@ -266,12 +288,7 @@ class BzDataTableModel(QAbstractTableModel):
                 return self.column_alignment[column]
 
             case Qt.ItemDataRole.BackgroundRole:
-                # if (
-                #     self.row_type(row) == RowType.COMPLETED
-                #     or self.row_type(row) == RowType.DUPLICATED
-                # ) and row_data.completed_run != self.to_do.current_run:
-                #     return QColor("PowderBlue")
-
+                # Mark the currently processing line with a different background
                 if file_name == CurrentState.CurrentFile:
                     return QColor("papayawhip")
 
@@ -281,8 +298,10 @@ class BzDataTableModel(QAbstractTableModel):
                 return
 
     def update_interval(self):
-        # Refresh the interval column on the currently progressing item
-        # print(f"Update Data Interval: {str(datetime.now()).split('.')[0]}")
+        """
+        Updates the interval on the currently processed file every second
+        """
+
         if CurrentState.CurrentFile is None:
             return
 
@@ -295,11 +314,20 @@ class BzDataTableModel(QAbstractTableModel):
         self.dataChanged.emit(start_index, end_index, [Qt.ItemDataRole.DisplayRole])
 
     def canFetchMore(self, index):
+        """
+        Returns True if more data can be fetched
+        """
         if index.isValid():
             return False
         return self.end_index < CurrentState.ToDoListLength
 
     def fetchLess(self):
+        """
+        fetchMore is build in and adds more data to the table, but since I want the
+        window, then I have to actually remove data at the beginning. This method
+        does the work when I scroll up to the beginning, and there is more data to be
+        displayed.
+        """
         self.layoutAboutToBeChanged.emit()
         old_row = self.start_index
         if self.start_index - self.batch_size > 0:
@@ -308,16 +336,27 @@ class BzDataTableModel(QAbstractTableModel):
             self.start_index = 0
         self.end_index -= self.batch_size
         self.layoutChanged.emit()
+
+        # I want to scroll up to the middle of the new data I've added
+        if old_row - self.batch_size < 0:
+            scroll_to_row = 0
+        else:
+            scroll_to_row = old_row - int(self.batch_size / 2)
         self.backup_status.data_model_table.scrollTo(
-            self.index(old_row, 0),
+            self.index(scroll_to_row, 0),
             hint=QAbstractItemView.ScrollHint.PositionAtCenter,
         )
 
     def fetchMore(self, index):
+        """
+        If I scroll down to the bottom of the displayed list, add more data.
+        """
         if index.isValid():
             return
         current_len = self.end_index - self.start_index
-        if current_len >= self.max_nodes:
+        # If adding more data means that I go over the max_rows, then I need to
+        # remove some rows at the beginning
+        if current_len >= self.max_rows:
             self.layoutAboutToBeChanged.emit()
             if self.start_index + self.batch_size < CurrentState.ToDoListLength:
                 self.start_index += self.batch_size
@@ -331,16 +370,20 @@ class BzDataTableModel(QAbstractTableModel):
             self.endInsertRows()
 
     def go_to_current_row(self):
+        """
+        Go to the currently processing file, adjusting the start and end rows so that
+        it is in the middle of the viewed rows.
+        """
         if CurrentState.CurrentFile is None:
             return
         self.backup_status.data_model_table.resizeRowsToContents()
 
         self.layoutAboutToBeChanged.emit()
         index = CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.IndexCount]
-        self.start_index = int(index - (self.max_nodes / 2))
+        self.start_index = int(index - (self.max_rows / 2))
         if self.start_index < 0:
             self.start_index = 0
-        self.end_index = int(index + (self.max_nodes / 2))
+        self.end_index = int(index + (self.max_rows / 2))
         self.backup_status.data_model_table.scrollTo(
             self.index(index - self.start_index, 0),
             hint=QAbstractItemView.ScrollHint.PositionAtCenter,
@@ -348,14 +391,30 @@ class BzDataTableModel(QAbstractTableModel):
         self.layoutChanged.emit()
 
     def go_to_bottom(self):
+        """
+        Go the bottom row, adjusting the start and end rows so that it is at the end
+        """
         self.layoutAboutToBeChanged.emit()
         index = len(CurrentState.ToDoList)
-        self.start_index = int(index - self.max_nodes / 2)
+        self.start_index = int(index - self.max_rows / 2)
         if self.start_index < 0:
             self.start_index = 0
         self.end_index = int(index)
         self.backup_status.data_model_table.scrollTo(
-            self.index(index - self.start_index, 0),
-            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+            self.index(index, 0),
+            hint=QAbstractItemView.ScrollHint.PositionAtBottom,
+        )
+        self.layoutChanged.emit()
+
+    def go_to_top(self):
+        """
+        Go the top row, adjusting the start and end rows so that it is at the end
+        """
+        self.layoutAboutToBeChanged.emit()
+        self.start_index = 0
+        self.end_index = min(CurrentState.ToDoListLength, self.batch_size)
+        self.backup_status.data_model_table.scrollTo(
+            self.index(0, 0),
+            hint=QAbstractItemView.ScrollHint.PositionAtTop,
         )
         self.layoutChanged.emit()
