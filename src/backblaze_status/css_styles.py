@@ -15,6 +15,18 @@ QWidget
     background-color: #323232;
 }
 
+QTableWidget
+{
+    color: #b1b1b1;
+    background-color: #323232;
+}
+
+QTableView
+{
+    color: #b1b1b1;
+    background-color: #323232;
+}
+
 QTreeView, QListView
 {
     background-color: silver;
@@ -234,6 +246,10 @@ QProgressBar::chunk {
                             stop: 1 #8fd3f4 );
 }
 
+QTableWidget::item {
+    padding: 5;
+}
+
 QLabel#FileInfo {
     border: 0.5px solid #8fd3f4;
     padding-top: 6px;
@@ -250,6 +266,13 @@ QLabel#StatsInfo {
 }
 
 QLabel#Clock {
+    border: 0.5px solid #8fd3f4;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    margin: 0;
+}
+
+QTableWidget#StatsInfo {
     border: 0.5px solid #8fd3f4;
     padding-top: 6px;
     padding-bottom: 6px;
