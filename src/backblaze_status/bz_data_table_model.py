@@ -1,28 +1,27 @@
 from __future__ import annotations
 
-import threading
 from datetime import datetime
 from enum import Enum, auto, IntEnum
-from typing import Any, Optional
-from rich.pretty import pprint
+from typing import Any
 
 from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex, pyqtSlot, QTimer
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor
+from PyQt6.QtWidgets import QAbstractItemView
 
-from .backup_file import BackupFile
-from .backup_file_list import BackupFileList
-from .to_do_files import ToDoFiles
+from .constants import Key, ToDoColumns
+from .current_state import CurrentState
 from .utils import file_size_string
 
 
 class ColumnNames(IntEnum):
     TIMESTAMP = 0
     FILE_NAME = 1
-    CHUNKS_TRANSMITTED = 2
-    CHUNKS_DEDUPED = 3
-    FILE_SIZE = 4
-    INTERVAL = 5
-    RATE = 6
+    CHUNKS_PREPARED = 2
+    CHUNKS_TRANSMITTED = 3
+    CHUNKS_DEDUPED = 4
+    FILE_SIZE = 5
+    INTERVAL = 6
+    RATE = 7
 
 
 class RowType(Enum):
@@ -32,6 +31,7 @@ class RowType(Enum):
     DUPLICATED = auto()
     PREVIOUS_RUN = auto()
     UNKNOWN = auto()
+    SKIPPED = auto()
 
 
 class BzDataTableModel(QAbstractTableModel):
@@ -48,46 +48,51 @@ class BzDataTableModel(QAbstractTableModel):
         RowType.CURRENT: QColor("green"),
         RowType.TO_DO: QColor("grey"),
         RowType.DUPLICATED: QColor("orange"),
-        RowType.PREVIOUS_RUN: QColor("black"),
+        RowType.PREVIOUS_RUN: QColor("magenta"),
+        RowType.SKIPPED: QColor("darkMagenta"),
     }
 
-    def __init__(self, backup_status):
+    def __init__(self, backup_status, batch_size=25, max_nodes=200):
         from .qt_backup_status import QTBackupStatus
 
         super(BzDataTableModel, self).__init__()
         self.backup_status: QTBackupStatus = backup_status
-        self.display_cache: list[BackupFile] = []
+        self.batch_size: int = batch_size
+        self.max_nodes: int = max_nodes
 
-        self.lock: threading.Lock = threading.Lock()
+        self.start_index: int = 0
+        self.end_index: int = min(CurrentState.ToDoListLength, batch_size)
 
-        self.in_progress_file: Optional[BackupFile] = None
+        self.interval_timer = QTimer()
+        self.interval_timer.timeout.connect(self.update_interval)
+        self.interval_timer.start(1000)
 
-        self.fixed_font = QFont(".SF NS Mono")
+        self.batch_size: int = batch_size
+        self.max_nodes: int = max_nodes
 
-        self.to_do: ToDoFiles = self.backup_status.to_do
-        if self.to_do is None:
-            # If to_do isn't available yet, get a signal when it is
-            self.backup_status.signals.to_do_available.connect(self.to_do_loaded)
-            self.backup_status.signals.backup_running.connect(self.backup_state_changed)
-
-            self.completed_files_list: Optional[BackupFileList] = None
-            self.to_do_files_list: Optional[BackupFileList] = None
-        else:
-            self.completed_files_list: BackupFileList = self.to_do.completed_file_list
-            self.to_do_files_list: BackupFileList = self.to_do.completed_file_list
-
-            self.update_display_cache()
-
-        self.backup_status.signals.files_updated.connect(self.update_display_cache)
+        self.backup_status.signals.to_do_available.connect(self.to_do_loaded)
+        self.backup_status.signals.go_to_current_row.connect(self.go_to_current_row)
 
         self.column_names = [
             "Time",
             "File Name",
+            "Chunks Prepared",
             "Chunks Transmitted",
             "Chunks Deduped",
             "File Size",
             "Interval",
             "Rate",
+        ]
+
+        self.source_column_names = [
+            ToDoColumns.StartTime,
+            ToDoColumns.FileName,
+            ToDoColumns.PreparedChunksCount,
+            ToDoColumns.TransmittedChunksCount,
+            ToDoColumns.DedupedChunksCount,
+            ToDoColumns.FileSize,
+            ToDoColumns.Interval,
+            ToDoColumns.Rate,
         ]
 
         self.column_alignment = [
@@ -98,22 +103,21 @@ class BzDataTableModel(QAbstractTableModel):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         ]
 
     @pyqtSlot()
     def to_do_loaded(self):
-        self.to_do: ToDoFiles = self.backup_status.to_do
-        self.completed_files_list: BackupFileList = self.to_do.completed_file_list
-        self.to_do_files_list: BackupFileList = self.to_do.completed_file_list
-        self.update_display_cache()
-
-    @pyqtSlot(bool)
-    def backup_state_changed(self, state: bool):
-        if not state:
-            self.in_progress_file = None
+        self.start_index = 0
+        self.end_index = min(CurrentState.ToDoListLength, self.batch_size)
+        self.layoutChanged.emit()
 
     def rowCount(self, index: QModelIndex) -> int:
-        return len(self.display_cache)
+        row_count = self.end_index - self.start_index
+        if row_count == 0:
+            self.start_index = 0
+            self.end_index = min(CurrentState.ToDoListLength, self.batch_size)
+        return self.end_index - self.start_index
 
     def columnCount(self, index: QModelIndex) -> int:
         return len(self.column_names)
@@ -130,97 +134,145 @@ class BzDataTableModel(QAbstractTableModel):
                     case Qt.Orientation.Horizontal:
                         return self.column_names[section]
                     case _:
-                        return section + 1
+                        row_num = f"{self.start_index + section + 1:,}"
+                        return row_num
             case _:
                 return
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
-        if self.to_do is None:
+        row = index.row() + self.start_index
+        column = index.column()
+
+        try:
+            file_name = CurrentState.FileIndex[row]
+            row_data = CurrentState.ToDoList[file_name]
+        except KeyError:
             return
 
-        row = index.row()
-        column = index.column()
-        if self.row_type(row) == RowType.CURRENT:
-            row_data: BackupFile = self.in_progress_file
-        else:
-            row_data: BackupFile = self.display_cache[row]
-
         match role:
-            case Qt.ItemDataRole.FontRole:
-                return self.fixed_font
+            # case Qt.ItemDataRole.FontRole:
+            #     return self.fixed_font
 
             case Qt.ItemDataRole.TextAlignmentRole:
                 return self.column_alignment[column]
 
             case Qt.ItemDataRole.DisplayRole:
-                match column:
-                    case ColumnNames.TIMESTAMP:
-                        # No timestamp for future items
-                        if self.row_type(row) == RowType.TO_DO:
+                match self.source_column_names[column]:
+                    case ToDoColumns.StartTime:
+                        start_time: datetime = row_data[ToDoColumns.StartTime]
+                        if start_time is None:
                             return
 
-                        return (
-                            row_data.start_time.strftime("%m/%d/%Y %I:%M:%S %p")
-                            if row_data.start_time
-                            else None
-                        )
-                    case ColumnNames.FILE_NAME:
-                        return str(row_data.file_name)
-                    case ColumnNames.CHUNKS_TRANSMITTED:
-                        if self.row_type(row) == RowType.TO_DO:
+                        result = start_time.strftime("%m/%d/%Y %I:%M:%S %p")
+                        return result
+
+                    case ToDoColumns.FileName:
+                        return file_name
+
+                    case ToDoColumns.PreparedChunksCount:
+                        result = len(row_data[ToDoColumns.PreparedChunks])
+                        if result == 0:
+                            return
+                        return result
+
+                    case ToDoColumns.TransmittedChunksCount:
+                        result = len(row_data[ToDoColumns.TransmittedChunks])
+                        if result == 0:
+                            return
+                        return result
+
+                    case ToDoColumns.DedupedChunksCount:
+                        result = len(row_data[ToDoColumns.DedupedChunks])
+                        if result == 0:
+                            return
+                        return result
+
+                    case ToDoColumns.FileSize:
+                        return file_size_string(row_data[ToDoColumns.FileSize])
+
+                    case ToDoColumns.Interval:
+                        start_time = row_data[ToDoColumns.StartTime]
+                        end_time = row_data[ToDoColumns.EndTime]
+                        if start_time is None:
                             return
 
-                        count = len(row_data.transmitted_chunks)
-                        if count == 0:
-                            return
-                        else:
-                            return count
-                    case ColumnNames.CHUNKS_DEDUPED:
-                        if self.row_type(row) == RowType.TO_DO:
+                        if end_time is None:
+                            end_time = datetime.now()
+
+                        if (
+                            start_time.tzinfo is None
+                            or start_time.tzinfo.utcoffset(start_time) is None
+                        ):
+                            start_time = start_time.astimezone()
+                        if (
+                            end_time.tzinfo is None
+                            or end_time.tzinfo.utcoffset(end_time) is None
+                        ):
+                            end_time = end_time.astimezone()
+
+                        return str(end_time - start_time).split(".")[0]
+
+                    case ToDoColumns.Rate:
+                        start_time = row_data[ToDoColumns.StartTime]
+                        end_time = row_data[ToDoColumns.EndTime]
+                        if start_time is None or end_time is None:
                             return
 
-                        count = len(row_data.deduped_chunks)
-                        if count == 0:
-                            return
-                        else:
-                            return count
-                    case ColumnNames.FILE_SIZE:
-                        return file_size_string(row_data.file_size)
-                    case ColumnNames.INTERVAL:
-                        if self.row_type(row) == RowType.CURRENT:
-                            if row_data.start_time is None:
-                                return
+                        if (
+                            start_time.tzinfo is None
+                            or start_time.tzinfo.utcoffset(start_time) is None
+                        ):
+                            start_time = start_time.astimezone()
+                        if (
+                            end_time.tzinfo is None
+                            or end_time.tzinfo.utcoffset(end_time) is None
+                        ):
+                            end_time = end_time.astimezone()
 
-                            time_diff = datetime.now() - row_data.start_time
-                            return str(time_diff).split(".")[0]
+                        time_difference = (end_time - start_time).total_seconds()
+                        if time_difference == 0:
+                            return "0.0 / sec" ""
+                        result = row_data[ToDoColumns.FileSize] / time_difference
+                        return f"{file_size_string(result)} / sec"
 
-                        if row_data.end_time is None or row_data.start_time is None:
-                            return
-
-                        time_diff = row_data.end_time - row_data.start_time
-                        return str(time_diff).split(".")[0]
-                    case ColumnNames.RATE:
-                        if self.row_type(row) == RowType.COMPLETED:
-                            return row_data.rate
-                        else:
-                            return
-                    case _:
-                        return
+                    # case ToDoColumns.IsDeduped:
+                    #     deduped = row_data[ToDoColumns.IsDeduped]
+                    #     if deduped.isna():
+                    #         return False
+                    #     else:
+                    #         return deduped
+                    # case _:
+                    #     return str(row_data[self.source_column_names[column]])
 
             case Qt.ItemDataRole.ForegroundRole:
-                return self.RowForegroundColors[self.row_type(row, row_data)]
+                if file_name == CurrentState.CurrentFile:
+                    return self.RowForegroundColors[RowType.CURRENT]
+
+                if row_data[ToDoColumns.IsDeduped]:
+                    return self.RowForegroundColors[RowType.DUPLICATED]
+
+                if row_data[ToDoColumns.State] == Key.PreCompleted:
+                    return self.RowForegroundColors[RowType.PREVIOUS_RUN]
+
+                if row_data[ToDoColumns.State] == Key.Completed:
+                    return self.RowForegroundColors[RowType.COMPLETED]
+
+                if row_data[ToDoColumns.State] == Key.Skipped:
+                    return self.RowForegroundColors[RowType.SKIPPED]
+
+                return self.RowForegroundColors[RowType.TO_DO]
 
             case Qt.ItemDataRole.TextAlignmentRole:
                 return self.column_alignment[column]
 
             case Qt.ItemDataRole.BackgroundRole:
-                if (
-                    self.row_type(row) == RowType.COMPLETED
-                    or self.row_type(row) == RowType.DUPLICATED
-                ) and row_data.completed_run != self.to_do.current_run:
-                    return QColor("PowderBlue")
+                # if (
+                #     self.row_type(row) == RowType.COMPLETED
+                #     or self.row_type(row) == RowType.DUPLICATED
+                # ) and row_data.completed_run != self.to_do.current_run:
+                #     return QColor("PowderBlue")
 
-                if self.row_type(row) == RowType.CURRENT:
+                if file_name == CurrentState.CurrentFile:
                     return QColor("papayawhip")
 
                 return QColor("black")
@@ -228,87 +280,82 @@ class BzDataTableModel(QAbstractTableModel):
             case _:
                 return
 
-    def show_new_file(self, file: BackupFile):
-        # Set up the new in_progress file
-        file.start_time = datetime.now()
-        self.in_progress_file = file
-
-        self.update_display_cache()
-
     def update_interval(self):
         # Refresh the interval column on the currently progressing item
-        if self.in_progress_file is not None:
-            start_index = self.createIndex(
-                len(self.to_do.completed_file_list), ColumnNames.CHUNKS_TRANSMITTED
-            )
-            end_index = self.createIndex(
-                len(self.to_do.completed_file_list), ColumnNames.INTERVAL
-            )
-            self.dataChanged.emit(start_index, end_index, [Qt.ItemDataRole.DisplayRole])
-
-    def update_display_cache(self):
-        if self.to_do is None:
+        # print(f"Update Data Interval: {str(datetime.now()).split('.')[0]}")
+        if CurrentState.CurrentFile is None:
             return
 
-        if self.to_do.completed_file_list is not None:
-            completed_file_list = self.to_do.completed_file_list
+        current_row = CurrentState.ToDoList[CurrentState.CurrentFile][
+            ToDoColumns.IndexCount
+        ]
+
+        start_index = self.index(int(current_row), ColumnNames.CHUNKS_PREPARED)
+        end_index = self.index(int(current_row), ColumnNames.INTERVAL)
+        self.dataChanged.emit(start_index, end_index, [Qt.ItemDataRole.DisplayRole])
+
+    def canFetchMore(self, index):
+        if index.isValid():
+            return False
+        return self.end_index < CurrentState.ToDoListLength
+
+    def fetchLess(self):
+        self.layoutAboutToBeChanged.emit()
+        old_row = self.start_index
+        if self.start_index - self.batch_size > 0:
+            self.start_index -= self.batch_size
         else:
-            completed_file_list = BackupFileList()
-
-        new_file_list = BackupFileList()
-        if self.in_progress_file:
-            new_file_list.append(self.in_progress_file)
-
-        if self.to_do.to_do_file_list is not None:
-            to_do_file_list = self.to_do.to_do_file_list[: self.ToDoDisplayCount]
-            if self.in_progress_file is not None:
-                try:
-                    index_number = self.to_do.to_do_file_list.file_list.index(
-                        self.in_progress_file
-                    )
-                    to_do_file_list = self.to_do.to_do_file_list[
-                        index_number + 1 : index_number + self.ToDoDisplayCount
-                    ]
-                except ValueError:
-                    pass
-
-            elif len(completed_file_list) > 0:
-                last_complete_file = completed_file_list[-1]
-                try:
-                    index_number = self.to_do.to_do_file_list.file_list.index(
-                        last_complete_file
-                    )
-                    to_do_file_list = self.to_do.to_do_file_list[
-                        index_number : index_number + self.ToDoDisplayCount
-                    ]
-                except ValueError:
-                    pass
-        else:
-            to_do_file_list = BackupFileList()
-
-        self.display_cache = completed_file_list + new_file_list + to_do_file_list
+            self.start_index = 0
+        self.end_index -= self.batch_size
         self.layoutChanged.emit()
-        self.backup_status.reposition_table()
+        self.backup_status.data_model_table.scrollTo(
+            self.index(old_row, 0),
+            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
 
-    def row_type(self, row: int, row_data: Optional[BackupFile] = None) -> RowType:
-        if self.to_do is None:
-            return RowType.UNKNOWN
+    def fetchMore(self, index):
+        if index.isValid():
+            return
+        current_len = self.end_index - self.start_index
+        if current_len >= self.max_nodes:
+            self.layoutAboutToBeChanged.emit()
+            if self.start_index + self.batch_size < CurrentState.ToDoListLength:
+                self.start_index += self.batch_size
 
-        if row < len(self.completed_files_list):
-            if (
-                row_data is not None
-                and row_data.completed_run != self.to_do.current_run
-            ):
-                return RowType.PREVIOUS_RUN
+            self.end_index += self.batch_size
+            self.layoutChanged.emit()
+        else:
+            target_len = min(current_len + self.batch_size, CurrentState.ToDoListLength)
+            self.beginInsertRows(index, current_len, target_len - 1)
+            self.end_index = target_len
+            self.endInsertRows()
 
-            if row_data is not None and (
-                row_data.is_deduped or row_data.is_deduped_chunks
-            ):
-                return RowType.DUPLICATED
+    def go_to_current_row(self):
+        if CurrentState.CurrentFile is None:
+            return
+        self.backup_status.data_model_table.resizeRowsToContents()
 
-            return RowType.COMPLETED
+        self.layoutAboutToBeChanged.emit()
+        index = CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.IndexCount]
+        self.start_index = int(index - (self.max_nodes / 2))
+        if self.start_index < 0:
+            self.start_index = 0
+        self.end_index = int(index + (self.max_nodes / 2))
+        self.backup_status.data_model_table.scrollTo(
+            self.index(index - self.start_index, 0),
+            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
+        self.layoutChanged.emit()
 
-        if self.in_progress_file and row == len(self.completed_files_list):
-            return RowType.CURRENT
-
-        return RowType.TO_DO
+    def go_to_bottom(self):
+        self.layoutAboutToBeChanged.emit()
+        index = len(CurrentState.ToDoList)
+        self.start_index = int(index - self.max_nodes / 2)
+        if self.start_index < 0:
+            self.start_index = 0
+        self.end_index = int(index)
+        self.backup_status.data_model_table.scrollTo(
+            self.index(index - self.start_index, 0),
+            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
+        self.layoutChanged.emit()
