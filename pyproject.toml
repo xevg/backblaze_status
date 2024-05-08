@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "backblaze_status"
-version = "0.8.2"
+version = "0.10.3"
 description = "Looking at the state of the Backblaze backup"
 authors = ["Xev Gittler"]
 license = "MIT"
@@ -14,6 +14,11 @@ psutil = "^5.9.7"
 rich = "^13.7.0"
 click = "^8.1.7"
 configparser = "^6.0.0"
+pandas = "^2.2.2"
+pytz = "^2024.1"
+sqlalchemy = "^2.0.29"
+readerwriterlock = "^1.0.9"
+pyobjc-framework-cocoa = "^10.2"
 
 [tool.poetry.dev-dependencies]
 
@@ -24,6 +29,11 @@ sphinx = "^7.2.6"
 sphinx-autoapi = "^3.0.0"
 sphinx-rtd-theme = "^2.0.0"
 myst-nb = "^1.0.0"
+commitizen = "^3.25.0"
+black = "^24.4.0"
+
+[tool.poetry.scripts]
+backblaze_status = 'backblaze_status:__main__.run'
 
 [tool.semantic_release]
 version_variables = [
@@ -48,10 +58,13 @@ env = "GH_TOKEN"
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-tag_format = "v$version"
+tag_format = "$version"
 version_scheme = "semver"
 version_provider = "poetry"
 update_changelog_on_bump = true
+version_files = [
+    "pyproject.toml:^version"
+]
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"

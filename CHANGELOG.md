@@ -2,6 +2,55 @@
 
 
 
+## 0.10.3 (2024-05-08)
+
+### Refactor
+
+- remove unnecessary files
+
+## 0.10.2 (2024-05-08)
+
+### Refactor
+
+- update for CurrentState
+
+## 0.10.1 (2024-05-08)
+
+### Fix
+
+- many changes and cleanup
+
+### Refactor
+
+- cleanup
+- Create status_table
+- make class for chunk dialog
+- clean up
+
+## 0.10.0 (2024-05-08)
+
+### Feat
+
+- many changes
+
+### Fix
+
+- add skipped, remaining, and stats
+
+### Refactor
+
+- Add constants
+
+## 0.9.5 (2024-05-08)
+
+### Fix
+
+- add QTableWidget
+
+### Refactor
+
+- use CurrentState
+
 ## 0.9.4 (2024-05-08)
 
 ### Fix
