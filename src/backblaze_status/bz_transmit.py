@@ -30,8 +30,8 @@ class BzTransmit:
     _bytes: int = field(default=0, init=False)
     _batch_count: int = field(default=0, init=False)
     publish_count: int = field(default=0, init=False)
-    _current_filename: Path | None = field(default=None, init=False)
-    _first_pass: bool = field(default=True, init=False)
+    current_filename: Path | None = field(default=None, init=False)
+    first_pass: bool = field(default=True, init=False)
     BZ_LOG_DIR: str = field(
         default="/Library/Backblaze.bzpkg/bzdata/bzlogs/bztransmit",
         init=False,
@@ -44,8 +44,7 @@ class BzTransmit:
         self._module_name = self.__class__.__name__
         self._multi_log.log("Starting BzTransmit")
 
-        self.go_to_end = True
-
+        # Compile search terms
         # Compile the match for prepare large file search
         self.prepare_match_re = re.compile(
             ".*Entering PrepareBzLargeFileDirWithLargeFile.*"
@@ -61,8 +60,6 @@ class BzTransmit:
             "noCopy code path VERY SUCCESSFUL,.*largeFileName=([^,]*).*_seq([^.]*)"
             # "noCopy code path VERY SUCCESSFUL,.*largeFileName=([^,]*).*_seq([^\.]*)"
         )
-
-        # self.backblaze_redis = BackBlazeRedis()
 
     def get_latest_logfile_name(self) -> Path:
         """
@@ -83,6 +80,10 @@ class BzTransmit:
         return last_file
 
     def process_line(self, _line: str) -> None:
+        """
+        Process each line in the log file
+        :param _line: the read line
+        """
         _filename: Path | None = None
         _bytes: int = 0
         _rate: str | None = None
@@ -122,6 +123,7 @@ class BzTransmit:
                 },
             )
 
+        # When this matches it means that a chunk was deduped
         _dedup_search_results = self.dedup_search_re.search(_line)
         if _dedup_search_results is not None:
             chunk_number = int(_dedup_search_results.group(1))
@@ -149,13 +151,13 @@ class BzTransmit:
                 {Key.FileName: filename, Key.Chunk: chunk_number},
             )
 
-        _new_to_do_file_search_results = self.new_to_do_file_re.search(_line)
-        if _new_to_do_file_search_results is not None:
-            # TODO: We need to re-read the to_do file
-            self._multi_log.log(f"There is a new ToDo file. Reread it ({_timestamp})")
-            pass
-
     def emit_message(self, message_type: str, message_string: str, data: dict) -> None:
+        """
+        A wrapper method that emits a standardized message
+        :param message_type: The message type
+        :param message_string: The message string
+        :param data: The underlying data to transfer
+        """
         self.publish_count += 1
         message = {
             "type": message_type,
@@ -167,32 +169,27 @@ class BzTransmit:
         self.backup_status.signals.get_messages.emit(message)
 
     def read_file(self) -> None:
-        _log_file = self.get_latest_logfile_name()
-        self._current_filename = _log_file
+        """
+        Read the log file
+        """
+        log_file = self.get_latest_logfile_name()
+        self.current_filename = log_file
         while True:
-            with _log_file.open("r") as _log_fd:
-                self._multi_log.log(f"Reading file {_log_file}")
-                if self._first_pass:
-                    _log_fd.seek(0, 2)
-                for _line in self._tail_file(_log_fd):
-                    self.process_line(_line)
+            with log_file.open("r") as log_fd:
+                self._multi_log.log(f"Reading file {log_file}")
+                # If this is the first time through, skip to the end of the file
+                if self.first_pass:
+                    self.first_pass = False
+                    log_fd.seek(0, 2)
+                while True:
+                    line = log_fd.readline()
 
-                self._first_pass = False
-                _log_file = self.get_latest_logfile_name()
-                self._current_filename = _log_file
+                    if not line:
+                        time.sleep(0.5)
+                        new_filename = self.get_latest_logfile_name()
+                        if new_filename != self.current_filename:
+                            break
+                        continue
 
-    def _tail_file(self, _file: TextIOWrapper) -> str:
-        while True:
-            _line = _file.readline()
-
-            if not _line:
-                if self._first_pass:
-                    self._multi_log.log("Finished first pass", module=self._module_name)
-                self._first_pass = False
-                time.sleep(0.5)
-                _new_filename = self.get_latest_logfile_name()
-                if _new_filename != self._current_filename:
-                    return
-                continue
-
-            yield _line
+            log_file = self.get_latest_logfile_name()
+            self.current_filename = log_file
