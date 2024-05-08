@@ -1,11 +1,15 @@
 from datetime import datetime
 from typing import Optional
 
-# from readerwriterlock import rwlock
+from readerwriterlock import rwlock
 from .constants import States
 
 
 class CurrentState:
+    """
+    This is a class with all static variables to manage global state.
+    """
+
     CurrentFile: Optional[str] = None
     CurrentFileState: str = States.Unknown
     StartTime: Optional[datetime] = None
@@ -71,10 +75,20 @@ class CurrentState:
 
     StatsCompletedChunksCount: int = 0
 
-    # _instance = None
-    # _lock: rwlock = rwlock.RWLockWrite()
-    #
-    # def __new__(cls):
-    #     if not cls._instance:
-    #         cls._instance = super(CurrentState, cls).__new__(cls)
-    #     return cls._instance
+    def __setattr__(self, attr, value):
+        """
+        Sets up a setter for every attribute
+        """
+        original_setter = super().__setattr__
+        if not hasattr(self, "_lock"):
+            original_setter("_lock", rwlock.RWLockFair())
+        with self._lock.gen_wlock():
+            original_setter(attr, value)
+
+    def __getattr__(self, attr):
+        original_getter = super().__getattribute__
+        original_setter = super().__setattr__
+        if not hasattr(self, "_lock"):
+            original_setter("_lock", rwlock.RWLockFair())
+        with self._lock.gen_wlock():
+            return original_getter(attr)
