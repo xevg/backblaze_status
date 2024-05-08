@@ -26,23 +26,29 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QAbstractItemView,
     QDialog,
-    QTableView, QPushButton,
+    QTableView,
+    QPushButton,
 )
 
 from .css_styles import CssStyles
+from .chunk_dialog import ChunkDialog
 
 # import qdarktheme
 
 
-class Ui_MainWindow(object):
-    def setupUi(self, MainWindow):
+class UiMainWindow(object):
+    def setup_ui(self, MainWindow):
         MainWindow.setObjectName("MainWindow")
         MainWindow.resize(2100, 1000)
 
         # Define the font to use when I need a fixed font
-        self.fixed_font = QFont(".SF NS Mono")
-        # QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        self.fixed_font = QFont(
+            ".SF NS Mono",
+        )
+        self.fixed_font.setStyleHint(QFont.StyleHint.Monospace)
         self.fixed_font.setPointSize(12)
+
+        # QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
 
         # The main widget
         self.centralwidget = QWidget(parent=MainWindow)
@@ -73,13 +79,6 @@ class Ui_MainWindow(object):
         self.main_vertical_container = QVBoxLayout(self.centralwidget)
         self.main_vertical_container.setObjectName("verticalLayout")
 
-        # self._create_data_model_table()
-        # test_table = QTableView(self.centralwidget)
-        # test_table.setObjectName("TestTable")
-        # test_table.setModel(BzDataTableModel(self))
-        # test_table.resizeRowsToContents()
-        # self.main_vertical_container.addWidget(test_table)
-
         # Set up the data table
         self.file_display_table = self._create_data_table()
         self.main_vertical_container.addWidget(self.file_display_table)
@@ -94,7 +93,7 @@ class Ui_MainWindow(object):
 
         self.chunk_box = self._create_chunk_box()
         self.main_vertical_container.addWidget(self.chunk_box)
-        self.chunk_box.hide()
+        # self.chunk_box.hide()
 
         # Set up the message box. It is hidden until needed
         self.message_box = self._create_label_box(
@@ -118,7 +117,7 @@ class Ui_MainWindow(object):
         )
         self.file_info.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
-        # self.file_info.hide()
+        self.file_info.hide()
         self.main_vertical_container.addWidget(self.file_info)
 
         # Set up the stats boxes
@@ -165,7 +164,6 @@ class Ui_MainWindow(object):
         self.stats_horizontal_Layout.addWidget(self.clock_display)
 
         self.main_vertical_container.addWidget(self.stat_groupbox)
-
         # Set up the total progress bar
 
         self.progress_groupbox = QGroupBox(parent=self.centralwidget)
@@ -301,9 +299,6 @@ class Ui_MainWindow(object):
         data_table.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.ResizeToContents
         )
-        data_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.Stretch
-        )
         data_table.verticalHeader().setVisible(True)
         return data_table
 
@@ -358,7 +353,7 @@ class Ui_MainWindow(object):
         self.chunk_filename = QLabel(chunk_groupBox)
         self.chunk_filename.setObjectName("ChunkFilename")
         horizontal.addWidget(self.chunk_filename)
-        self.chunk_filename.setText("Label goes here")
+        self.chunk_filename.setText("Waiting to start processing ...")
         self.chunk_filename.setFont(self.fixed_font)
         # self.chunk_filename.setFont(QFontDatabase.systemFont(
         # QFontDatabase.SystemFont.GeneralFont))
@@ -366,27 +361,34 @@ class Ui_MainWindow(object):
         self.chunk_box_table = self._create_chunk_table()
         horizontal.addWidget(self.chunk_box_table)
 
-        self.chunk_show_dialog_button = QPushButton("Push to Show Table", parent=self.centralwidget)
+        self.chunk_show_dialog_button = QPushButton(
+            "Push to Show Table", parent=self.centralwidget
+        )
         horizontal.addWidget(self.chunk_show_dialog_button)
         self.chunk_show_dialog_button.hide()
 
-        self.chunk_table_dialog = QDialog(parent=self.centralwidget)
-        self.chunk_table_dialog.setWindowModality(Qt.WindowModality.NonModal)
-        self.chunk_table_dialog.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
-        )
-
-        self.chunk_dialog_table = self._create_chunk_table()
-
-        self.chunk_table_dialog_layout = QVBoxLayout()
-        self.chunk_table_dialog_layout.addWidget(self.chunk_dialog_table)
-
-        self.chunk_table_dialog.setLayout(self.chunk_table_dialog_layout)
+        self.chunk_table_dialog_box = ChunkDialog(self.centralwidget)
+        # self.chunk_table_dialog_box = QDialog(parent=self.centralwidget)
+        # self.chunk_table_dialog_box.setWindowModality(Qt.WindowModality.NonModal)
+        # self.chunk_table_dialog_box.setSizePolicy(
+        #     QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        # )
+        #
+        # self.dialog_chunk_table = self._create_chunk_table(
+        #     widget=self.chunk_table_dialog_box
+        # )
+        #
+        # self.chunk_table_dialog_layout = QVBoxLayout()
+        # self.chunk_table_dialog_layout.addWidget(self.dialog_chunk_table)
+        #
+        # self.chunk_table_dialog_box.setLayout(self.chunk_table_dialog_layout)
 
         return chunk_groupBox
 
-    def _create_chunk_table(self):
-        chunk_table = QTableView(self.centralwidget)
+    def _create_chunk_table(self, widget=None):
+        if widget is None:
+            widget = self.centralwidget
+        chunk_table = QTableView(widget)
         chunk_table.setObjectName("ChunkTable")
 
         chunk_table.horizontalHeader().setMaximumSectionSize(2)
@@ -449,6 +451,67 @@ class Ui_MainWindow(object):
             label.setStyleSheet(style_string)
 
         return label
+
+    def _create_table_box(self, name: str, parent=None, style=None):
+        parent = parent or self.centralwidget
+        style = style or dict()
+
+        table_widget = QTableWidget(parent=parent)
+        table_widget.setObjectName(name)
+
+        # Row count
+        table_widget.setRowCount(2)
+
+        # Column count
+        table_widget.setColumnCount(10)
+
+        for row_index, row in enumerate(["Files", "Chunks"]):
+            for column_index, column in enumerate(
+                [
+                    f"Total {row}:",
+                    "Calculating",
+                    f"Completed {row}:",
+                    "Calculating",
+                    f"Transmitted {row}:",
+                    "Calculating",
+                    f"Duplicate {row}:",
+                    "Calculating",
+                    f"Percentage Duplicate {row}:",
+                    "Calculating",
+                ]
+            ):
+                item = QLabel(column)
+                item.setAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                # item.setSizeHint(100)
+                table_widget.setCellWidget(row_index, column_index, item)
+                # Table will fit the screen horizontally
+                table_widget.horizontalHeader().setStretchLastSection(False)
+                table_widget.horizontalHeader().setSectionResizeMode(
+                    QHeaderView.ResizeMode.Stretch
+                )
+
+        table_widget.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        table_widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # table_widget.setSelectionBehavior(
+        # QAbstractItemView.SelectionBehavior.SelectRows)
+        table_widget.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
+        table_widget.setShowGrid(False)
+
+        table_widget.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        table_widget.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        table_widget.horizontalHeader().setVisible(False)
+        table_widget.verticalHeader().setVisible(False)
+        table_widget.setMinimumWidth(1500)
+        table_widget.setMaximumHeight(60)
+        table_widget.resizeColumnsToContents()
+        table_widget.resizeRowsToContents()
+        return table_widget
 
     def retranslateUi(self, MainWindow):
         _translate = QtCore.QCoreApplication.translate
