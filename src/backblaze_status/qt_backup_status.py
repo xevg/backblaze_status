@@ -17,15 +17,13 @@ from PyQt6.QtGui import QShortcut, QIcon, QPixmap, QAction
 from PyQt6.QtWidgets import (
     QMainWindow,
     QAbstractItemView,
-    QAbstractSlider,
     QHeaderView,
-    QTableWidgetItem,
-    QLabel,
 )
 from icecream import ic, install
 
 from .bz_data_table_model import BzDataTableModel
 from .chunk_model import ChunkModel
+from .configuration import Configuration
 from .constants import ToDoColumns, States
 from .current_state import CurrentState
 from .qt_mainwindow import UiMainWindow
@@ -34,7 +32,6 @@ from .to_do_dialog import ToDoDialog
 from .to_do_dialog_model import ToDoDialogModel
 from .to_do_files import ToDoFiles
 from .utils import MultiLogger, file_size_string
-from .configuration import Configuration
 
 
 # Set up icecream debugging
@@ -49,13 +46,10 @@ ic.disable()
 
 
 class QTBackupStatus(QMainWindow, UiMainWindow):
-    # How large is each chunk in the chunk table, by pixel
-    PixelSize = 10
-
-    # A file with less than LargeChunkCount is medium-sized. A LargeChunkCount or
-    # larger and I create a separate window for it
-    SmallChunkCount = 50
-    LargeChunkCount = 400
+    """
+    This is the main Qt backup status module. It provides the GUI through the
+    default QMainWindow class and the custom UiMainWindow class.
+    """
 
     def __init__(
         self,
@@ -77,7 +71,10 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         )
         QCoreApplication.instance().setWindowIcon(QIcon(QPixmap(icon_path)))
 
-        # Set the name of the application
+        # Set the name of the application. This is supposed to set the application
+        # name instead of python, but sadly, it does not work.  But I'm going to
+        # leave this in here until I figure out how to do it right
+
         if sys.platform.startswith("darwin"):
             # Set app name, if PyObjC is installed
             # Python 2 has PyObjC preinstalled
@@ -108,14 +105,6 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
 
         self.signals = Signals()
         self.define_signals()
-
-        # Set up data elements
-
-        self.previous_file_name = None
-        self.large_file_name = None
-
-        # Flag to note if the display viewport has moved
-        self.display_moved = False
 
         # Currently selected row
         self.selected_row: int = -1
@@ -168,7 +157,7 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         self.bz_prepare_thread_worker.moveToThread(self.bz_prepare_thread)
         self.bz_prepare_thread.started.connect(self.bz_prepare_thread_worker.run)
         self.bz_prepare_thread.start()
-        #
+
         # Clock thread
         self.clock_timer = QTimer()
         self.clock_timer.setObjectName("Clock Update")
@@ -180,25 +169,13 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         self.progress_timer.timeout.connect(self.update_progress_box)
         self.progress_timer.start(1000)
 
-        #
-        # # Update Stats Box Thread
-        # from .worker_stats_box import StatsBoxWorker
-        #
-        # self.update_stats_box_thread = QThread()
-        # self.update_stats_box_thread.setObjectName("UpdateStatsBox")
-        # self.update_stats_box_worker: StatsBoxWorker = StatsBoxWorker(self)
-        # self.update_stats_box_worker.moveToThread(self.update_stats_box_thread)
-        # self.update_stats_box_worker.update_stats_box.connect(self.update_stats_box)
-        # self.update_stats_box_thread.started.connect(self.update_stats_box_worker.run)
-        # self.update_stats_box_thread.start()
-
-        # Update Chunk Box
+        # Set the Chunk Model for the chunk box and the chunk dialog
 
         self.chunk_model = ChunkModel(self)
         self.chunk_box_table.setModel(self.chunk_model)
         self.chunk_table_dialog_box.dialog_chunk_table.setModel(self.chunk_model)
 
-        # Update the windows title
+        # Update the windows title, defaulting to not running
         self.signals.backup_running.emit(False)
 
         # Set up key shortcuts
@@ -212,6 +189,7 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         self.c_key = QShortcut(Qt.Key.Key_C, self.data_model_table)
         self.c_key.activated.connect(self.c_pressed)
 
+        # Set up the callback if a row is selected
         self.data_model_table.clicked.connect(self.toggle_selection)
 
         # Set up Options Menu
@@ -226,32 +204,44 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         self.result_data: Optional[BzDataTableModel] = None
         self.result_data = BzDataTableModel(self)
         self.data_model_table.setModel(self.result_data)
+        # This has to be here, because if I do it in the UiWindow, then it will core
+        # dump, since it doesn't know how many columns there are at that point
         self.data_model_table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
 
+        # Set up the scroll bars
         self.data_model_table.verticalScrollBar().valueChanged.connect(self.scrolled)
-        self.data_model_table.verticalScrollBar().actionTriggered.connect(
-            self.scroll_bar_moved
-        )
 
     def define_signals(self):
+        """
+        Set up all the signals and connect them to the slots they call
+        """
+
+        # Set the window title
         self.signals.backup_running.connect(self.set_window_title)
-        self.progressBar.valueChanged.connect(self.update_progress_bar_percentage)
+
+        # Update the chunk box
         self.signals.update_chunk_progress.connect(self.update_chunk_progress)
+
+        # Notification that the to do file has been read
         self.signals.to_do_available.connect(self.to_do_available)
+
+        # Update the status box
         self.signals.update_stats_box.connect(self.update_stats_box)
 
+        # Notify when a new file has started
         self.signals.start_new_file.connect(self.start_new_file)
 
+        # Show the dialog box
         self.chunk_show_dialog_button.clicked.connect(self.show_chunk_dialog)
-
-        self.data_model_table.verticalScrollBar().actionTriggered.connect(
-            self.scroll_bar_moved
-        )
 
     @pyqtSlot(bool)
     def set_window_title(self, running: bool) -> None:
+        """
+        Set the window title depending on if backblaze is running
+        :param running: True if backblaze is running, False otherwise
+        """
         if running:
             self.setWindowTitle("Backblaze Status (Pandas)")
         else:
@@ -261,21 +251,29 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
 
     @pyqtSlot()
     def to_do_available(self):
+        """
+        When the to do file is available, I can enable the to do menu option
+        """
         self.show_to_do_button.setDisabled(False)
 
     @pyqtSlot()
     def show_chunk_dialog(self):
-        print("Show chunk button clicked")
+        """
+        Show the chunk dialog when the show button is clicked
+        """
+        ic("Show chunk button clicked")
         self.chunk_show_dialog_button.show()
         self.chunk_show_dialog_button.activateWindow()
         self.chunk_show_dialog_button.raise_()
 
     def pop_up_todo(self, _):
+        """
+        Show the to do dialog
+        """
         if self.to_do_dialog is None:
             self.to_do_dialog = ToDoDialog(self, ToDoDialogModel(self))
             self.to_do_dialog.exec()
         else:
-            # self.to_do_dialog.update_display_cache()
             self.to_do_dialog.setVisible(True)
 
     @pyqtSlot()
@@ -285,24 +283,23 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         """
 
         self.data_model_table.clearSelection()
-        self.display_moved = False
         self.result_data.go_to_bottom()
         self.data_model_table.resizeRowsToContents()
 
     @pyqtSlot()
     def t_pressed(self):
         """
-        Go to the top of the table
+        Go to the top of the table and clear the selection
         """
         self.data_model_table.clearSelection()
-        self.display_moved = False
         self.result_data.go_to_top()
         self.data_model_table.resizeRowsToContents()
 
     @pyqtSlot()
     def c_pressed(self):
         """
-        Center the selected row. Don't do anything if there is no row selected
+        If a row is selected, center that in the display. If no row is selected,
+        center the currently processing row.
         """
         selected_items = self.data_model_table.selectedIndexes()
         if len(selected_items) > 0:
@@ -313,19 +310,10 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
             self.signals.go_to_current_row.emit()
         self.data_model_table.resizeRowsToContents()
 
-    def reposition_table(self):
-        """
-        Reposition the table to the bottom, if there isn't already a row selected
-        """
-        self.data_model_table.resizeRowsToContents()
-        selected_items = self.data_model_table.selectedIndexes()
-        if len(selected_items) > 0:
-            return  # If we are not at the bottom, don't scroll there
-
-        self.signals.go_to_current_row.emit()
-
     def scrolled(self, _):
-        # print(f"scrolled {value}")
+        """
+        If the scroll bar is moved to the top, fetch less data
+        """
         actual_value = self.data_model_table.verticalScrollBar().value()
         if actual_value == self.data_model_table.verticalScrollBar().minimum():
             if self.result_data.start_index > 0:
@@ -333,15 +321,10 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
 
         pass
 
-    def scroll_bar_moved(self, event):
-        # TODO: Do I need this? If I delete it, remember to delete the signal as well
-        if event == QAbstractSlider.SliderAction.SliderToMaximum:
-            self.data_model_table.clearSelection()
-        elif event == QAbstractSlider.SliderAction.SliderToMinimum:
-            if self.result_data.start_index > 0:
-                self.result_data.fetchLess()
-
     def toggle_selection(self, e):
+        """
+        Toggle the selection
+        """
         if e.row() == self.selected_row:
             self.data_model_table.clearSelection()
             self.selected_row = -1
@@ -467,23 +450,13 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
             f"</b></td>"
         )
 
+        # Calculate the percentages
         if self.duplicate_files + self.transmitted_files == 0:
             percentage_file_duplicate = 0
         else:
             percentage_file_duplicate = self.duplicate_files / (
                 self.duplicate_files + self.transmitted_files
             )
-            if percentage_file_duplicate > 1:
-                percentage_file_duplicate = 1
-
-        if self.duplicate_bytes + self.transmitted_bytes == 0:
-            percentage_size_duplicate = 0
-        else:
-            percentage_size_duplicate = self.duplicate_bytes / (
-                self.duplicate_bytes + self.transmitted_bytes
-            )
-            if percentage_size_duplicate > 1:
-                percentage_size_duplicate = 1
 
         if self.duplicate_chunks + self.transmitted_chunks == 0:
             percentage_chunk_duplicate = 0
@@ -491,17 +464,6 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
             percentage_chunk_duplicate = self.duplicate_chunks / (
                 self.duplicate_chunks + self.transmitted_chunks
             )
-            if percentage_chunk_duplicate > 1:
-                percentage_chunk_duplicate = 1
-
-        if self.duplicate_chunk_bytes + self.transmitted_chunk_bytes == 0:
-            percentage_chunk_size_duplicate = 0
-        else:
-            percentage_chunk_size_duplicate = self.duplicate_chunk_bytes / (
-                self.duplicate_chunk_bytes + self.transmitted_chunk_bytes
-            )
-            if percentage_chunk_size_duplicate > 1:
-                percentage_chunk_size_duplicate = 1
 
         percentage_duplicate_files_string = (
             f"<td style='text-align: right; padding-right: 8;'>"
@@ -541,8 +503,6 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         )
         self.stats_info.setText(CurrentState.StatsString)
 
-        # self.show_to_do_button.setDisabled(False)
-
     @pyqtSlot()
     def update_progress_box(self):
         """
@@ -562,7 +522,8 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         total_bytes = self.total_bytes
 
         # The progress bar is an int, so if the value is larger than what an int can
-        # hold, then I just keep dividing numerator and denominator until they both fit
+        # hold, I just keep dividing numerator and denominator until they both fit.
+        # Since it's a percentage, as long as they are equally divided it still works
         while (
             completed_bytes >= CurrentState.MaxProgressValue
             or total_bytes >= CurrentState.MaxProgressValue
@@ -572,14 +533,19 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
 
         self.progressBar.setValue(int(completed_bytes))
         self.progressBar.setMaximum(int(total_bytes))
+
+        # Set elapsed time
         self.elapsed_time.setText(
             str(datetime.now() - CurrentState.StartTime).split(".")[0]
         )
-        time_remaining = str(timedelta(seconds=CurrentState.TimeRemaining)).split(".")[
-            0
-        ]
+
+        # Calculate remaining time
+        time_remaining_string = str(
+            timedelta(seconds=CurrentState.TimeRemaining)
+        ).split(".")[0]
         self.time_remaining.setText(
-            f'Time Remaining: <span style="color: cyan">' f"{time_remaining} </span>"
+            f'Time Remaining: <span style="color: cyan">'
+            f"{time_remaining_string} </span>"
         )
 
         if CurrentState.EstimatedCompletionTime is None:
@@ -588,6 +554,7 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
             completion_time = CurrentState.EstimatedCompletionTime.strftime(
                 "%a %m/%d %-I:%M %p"
             )
+
         self.completion_time.setText(
             f"Estimated Completion Time: "
             f'<span style="color: cyan"> {completion_time}'
@@ -602,6 +569,7 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         completed_bytes_string = file_size_string(self.completed_bytes)
         completed_file_string = self.completed_files
         completed_chunks_string = self.completed_chunks
+
         progress_string = (
             f'<span style="color: yellow">{completed_bytes_string} '
             f"</span> /"
@@ -619,20 +587,10 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         )
         self.progress.setText(progress_string)
 
-    @pyqtSlot(int)
-    def update_progress_bar_percentage(self, value: int):
-        """
-        Called when the value of the progress bar is updated, to set the format of
-        the progress bar
-        """
-        if self.progressBar.maximum() == 0:
-            return
-        percentage = (value - self.progressBar.minimum()) / (
-            self.progressBar.maximum() - self.progressBar.minimum()
-        )
-        self.progressBar.setFormat(f"{percentage:.2%}")
-
     def update_chunk_progress(self):
+        """
+        Update the chunk progress bar and the chunk progress text
+        """
         if self.to_do is None or CurrentState.CurrentFile is None:
             return
 
@@ -641,67 +599,41 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         ]
         if CurrentState.CurrentFileState == States.Transmitting:
 
-            # There is progressbar for large files, so update that
+            # There is progress bar for large files, so update that
             total_transmitted_chunks = len(
                 CurrentState.ToDoList[CurrentState.CurrentFile][
                     ToDoColumns.TransmittedChunks
                 ]
-            )
-            max_transmitted = (
-                0
-                if total_transmitted_chunks == 0
-                else max(
-                    CurrentState.ToDoList[CurrentState.CurrentFile][
-                        ToDoColumns.TransmittedChunks
-                    ]
-                )
             )
             total_deduped_chunks = len(
                 CurrentState.ToDoList[CurrentState.CurrentFile][
                     ToDoColumns.DedupedChunks
                 ]
             )
-            max_deduped = (
-                0
-                if total_deduped_chunks == 0
-                else max(
-                    CurrentState.ToDoList[CurrentState.CurrentFile][
-                        ToDoColumns.DedupedChunks
-                    ]
-                )
-            )
-            max_chunk = max([max_deduped, max_transmitted])
 
-            self.transmit_chunk_progress_bar.setValue(max_chunk)
+            total_processed_chunks = total_transmitted_chunks + total_deduped_chunks
+            self.transmit_chunk_progress_bar.setValue(total_processed_chunks)
 
             self.chunk_filename.setText(
                 f"Transmitting: {CurrentState.CurrentFile}"
-                f" ({total_transmitted_chunks + total_deduped_chunks:>4,} /"
+                f" ({total_processed_chunks:>4,} /"
                 f" {total_chunks:,} chunks)"
             )
 
         elif CurrentState.CurrentFileState == States.Preparing:
 
-            max_prepared = (
-                0
-                if len(
-                    CurrentState.ToDoList[CurrentState.CurrentFile][
-                        ToDoColumns.PreparedChunks
-                    ]
-                )
-                == 0
-                else max(
-                    CurrentState.ToDoList[CurrentState.CurrentFile][
-                        ToDoColumns.PreparedChunks
-                    ]
-                )
+            processed_prepared = len(
+                CurrentState.ToDoList[CurrentState.CurrentFile][
+                    ToDoColumns.PreparedChunks
+                ]
             )
+
             # There is progressbar for large files, so update that
-            self.prepare_chunk_progress_bar.setValue(max_prepared)
+            self.prepare_chunk_progress_bar.setValue(processed_prepared)
 
             self.chunk_filename.setText(
                 f"Preparing: {CurrentState.CurrentFile}"
-                f" ({max_prepared:>4,} /"
+                f" ({processed_prepared:>4,} /"
                 f" {total_chunks:,} chunks)"
             )
 
@@ -710,21 +642,24 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         """
         Called by the BzTransmit thread when it detects a new file
         """
-        # ic(f"start_new_file({file_name})")
+        ic(f"start_new_file({file_name})")
 
-        # Hide the chunk box if it was visible and replace it with the file_info box
+        # If the current file is a large file, then hide the file_info box and
+        # replace it with the chunk box
         if CurrentState.ToDoList[file_name][ToDoColumns.IsLargeFile]:
 
             self.file_info.hide()
             self.chunk_box.show()
 
             chunks = CurrentState.ToDoList[file_name][ToDoColumns.ChunkCount]
+
             # Reset the chunk progress bars
             self.transmit_chunk_progress_bar.setValue(0)
             self.transmit_chunk_progress_bar.setMaximum(chunks)
             self.prepare_chunk_progress_bar.setValue(0)
             self.prepare_chunk_progress_bar.setMaximum(chunks)
 
+            # Reset the chunk table
             self.chunk_model.reset_table()
             if self.chunk_model.use_dialog:
                 self.use_chunk_dialog()
@@ -737,39 +672,38 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
             self.file_info.setText(f"Sending file {file_name}")
 
     def use_chunk_dialog(self):
-        # If the file is really large, I need to use a popup to show the progress
-        self.dialog_chunk_table.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
-        self.dialog_chunk_table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        """
+        Pop up the chunk dialog if the number of chunks is large enough
+        """
 
         self.chunk_table_dialog_box.setWindowTitle(CurrentState.CurrentFile)
         self.chunk_table_dialog_box.show()
-        self.dialog_chunk_table.show()
+        self.chunk_table_dialog_box.dialog_chunk_table.show()
         self.chunk_box_table.hide()
         self.chunk_show_dialog_button.show()
         self.chunk_show_dialog_button.setEnabled(True)
 
-        self.dialog_chunk_table.resizeRowsToContents()
-        self.dialog_chunk_table.resizeColumnsToContents()
+        self.chunk_table_dialog_box.resizeRowsToContents()
+        self.chunk_table_dialog_box.resizeColumnsToContents()
 
-        self.dialog_chunk_table.setVerticalScrollBarPolicy(
+        self.chunk_table_dialog_box.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        self.dialog_chunk_table.setHorizontalScrollBarPolicy(
+        self.chunk_table_dialog_box.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
 
-        self.dialog_chunk_table.setFixedWidth(
+        self.chunk_table_dialog_box.setFixedWidth(
             self.chunk_box_table.horizontalHeader().length()
         )
-        self.dialog_chunk_table.setFixedHeight(
+        self.chunk_table_dialog_box.setFixedHeight(
             self.chunk_box_table.verticalHeader().length()
         )
 
     def use_chunk_box(self):
+        """
+        Use the chunk table in the main window if it fits
+        """
         self.chunk_box_table.setVerticalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
@@ -783,7 +717,6 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         self.chunk_box_table.setFixedHeight(
             self.chunk_box_table.verticalHeader().length()
         )
-        # @@@ self.chunk_box_table.show()
         self.chunk_table_dialog_box.hide()
         self.chunk_show_dialog_button.hide()
         self.chunk_box_table.show()
