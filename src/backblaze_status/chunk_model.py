@@ -7,7 +7,6 @@ from PyQt6.QtCore import (
     Qt,
     QModelIndex,
     QTimer,
-    QReadWriteLock,
 )
 from PyQt6.QtGui import QColor
 
@@ -17,7 +16,16 @@ from .to_do_files import ToDoFiles
 
 
 class ChunkModel(QAbstractTableModel):
+    """
+    The data model for the chunk progress table
+    """
+
     class ModelSize(IntEnum):
+        """
+        The t-shirt sizes of the chunk progress table, to determine how big of a box
+        to make it
+        """
+
         Small = 50
         Medium = 400
         Large = 10000
@@ -25,6 +33,10 @@ class ChunkModel(QAbstractTableModel):
         Default = 400
 
     class TableSize(IntEnum):
+        """
+        The size of the table for each t-shirt size
+        """
+
         Small = 20
         Medium = 50
         Large = 75
@@ -39,42 +51,53 @@ class ChunkModel(QAbstractTableModel):
         self.use_dialog: bool = False
         self.last_reset_table_time: datetime = datetime.now()
 
+        # Update the table every half a second
         self.update_timer: QTimer = QTimer()
         self.update_timer.timeout.connect(self.layoutChanged.emit)
         self.update_timer.start(500)
 
         self.table_size = 0
 
-        self.lock: QReadWriteLock = QReadWriteLock(
-            recursionMode=QReadWriteLock.RecursionMode.Recursive
-        )
-
     def calculate_chunk(self, row: int, column: int) -> int:
+        """
+        The table is not a 1:1 of the chunks, because for larger files it would be
+        way too big, so this method returns which cell the row and column refer to
+        """
+
+        # The tables are square
         cell_size = self.table_size * self.table_size
+
+        # The multiplier is how many chunks are in each cell
         multiplier = (
             CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.ChunkCount]
             / cell_size
         )
+
         chunk = row * self.table_size + column
         chunk *= multiplier
         return int(chunk)
 
     def reset_table(self):
+        """
+        Starts a new table with a new file
+        """
         to_do: ToDoFiles = self.backup_status.to_do
+        # If we haven't read the to_do file yet, or we aren't processing a file, return
         if to_do is None or CurrentState.CurrentFile is None:
             return
 
-        if (
-            CurrentState.CurrentFile is None
-            or CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.ChunkCount]
-            == 0
-        ):
+        # If there are no chunks, then set the table_size to 0
+        if CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.ChunkCount] == 0:
             self.table_size = 0
             return
 
         chunks = CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.ChunkCount]
 
+        # By default, we don't use the dialog
         self.use_dialog = False
+
+        # Set the t-shirt table size based on the number of chunks.
+        # For Large and Extra Large, use the dialog box.
 
         if chunks <= self.ModelSize.Small:
             self.table_size = self.TableSize.Small
@@ -87,24 +110,20 @@ class ChunkModel(QAbstractTableModel):
             self.use_dialog = True
             self.table_size = self.TableSize.X_Large
 
+        # TODO: Is this correct, or should I be basing it on each different t-shirt
+        #  size?
         pixel_size = int(self.TableSize.X_Large / self.table_size)
 
         max_dimension = (self.table_size * pixel_size) + 5  # 5 for padding
-        # max_size = (self.rows_columns * self.qt.PixelSize) + 5
 
+        # Set the cell width based on the pixel size
         if self.use_dialog:
-            self.backup_status.chunk_table_dialog_box.dialog_chunk_table.setMaximumSize(
-                max_dimension, max_dimension
-            )
+            dialog_table = self.backup_status.chunk_table_dialog_box.dialog_chunk_table
+            dialog_table.setMaximumSize(max_dimension, max_dimension)
             for spot in range(self.table_size):
-                self.backup_status.chunk_table_dialog_box.dialog_chunk_table.setColumnWidth(
-                    spot, pixel_size
-                )
-                self.backup_status.chunk_table_dialog_box.dialog_chunk_table.setRowHeight(
-                    spot, pixel_size
-                )
+                dialog_table.setColumnWidth(spot, pixel_size)
+                dialog_table.setRowHeight(spot, pixel_size)
         else:
-            # self.qt.chunk_box_table.setMaximumSize(max_dimension, max_dimension)
             for spot in range(self.table_size):
                 self.backup_status.chunk_box_table.setColumnWidth(spot, pixel_size)
                 self.backup_status.chunk_box_table.setRowHeight(spot, pixel_size)
@@ -113,10 +132,13 @@ class ChunkModel(QAbstractTableModel):
         row = index.row()
         column = index.column()
 
-        to_do = CurrentState.ToDoList[CurrentState.CurrentFile]
+        to_do: ToDoFiles = CurrentState.ToDoList[CurrentState.CurrentFile]
+
+        # If we haven't read the to_do file yet, or we aren't processing a file, return
         if to_do is None or CurrentState.CurrentFile is None:
             return
 
+        # Based on the row and column, figure out what chunk it is
         chunk = self.calculate_chunk(row, column)  # row * self.rows_columns + column
 
         # The order is important. Chunks can be in both transmitted and deduped,
@@ -137,12 +159,13 @@ class ChunkModel(QAbstractTableModel):
             return QColor("#818a84")  # The default color
 
     def rowCount(self, index: QModelIndex) -> int:
-        # Subtract two so that no matter what the way things are, we don't go over
         return int(self.table_size)
 
     def columnCount(self, index: QModelIndex) -> int:
-        # Subtract two so that no matter what the way things are, we don't go over
         if self.table_size == 0:
+            # If the table isn't built, then we need to try building it, but it would
+            # be too much to do it each time, so just do it if five seconds has
+            # passed since the last time
             if (datetime.now() - self.last_reset_table_time).seconds > 5:
                 self.reset_table()
                 self.last_reset_table_time = datetime.now()
