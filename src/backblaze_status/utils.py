@@ -7,6 +7,7 @@ from datetime import datetime
 from math import floor
 from pathlib import Path
 
+
 # from flipper import FeatureFlagClient, MemoryFeatureFlagStore
 from rich.console import Console
 from rich.text import Text
