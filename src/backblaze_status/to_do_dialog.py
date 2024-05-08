@@ -16,23 +16,28 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
 )
 
-from .css_styles import CssStyles
-from .to_do_dialog_model import ToDoDialogModel
-from .to_do_files import ToDoFiles
-from .current_state import CurrentState
 from .constants import ToDoColumns
+from .css_styles import CssStyles
+from .current_state import CurrentState
+from .to_do_dialog_model import ToDoDialogModel
 
 
 class ToDoDialog(QDialog):
+    """
+    This class pops up a dialog box for the entire to do list
+    """
+
     def __init__(self, backup_status, model: ToDoDialogModel):
         super().__init__()
 
         from .qt_backup_status import QTBackupStatus
 
-        self.backup_status: "QTBackupStatus" = backup_status
+        self.backup_status: QTBackupStatus = backup_status
         self.model = model
 
         self.setStyleSheet(CssStyles.dark_orange)
+
+        # Configuration for the search box
         self.matching_indexes = None
         self.current_matching_index: int = 0
 
@@ -41,27 +46,38 @@ class ToDoDialog(QDialog):
             QSizePolicy.Policy.MinimumExpanding, QSizePolicy.Policy.MinimumExpanding
         )
 
-        self.search_group_box = QGroupBox("Search")
+        # Create a group box for the search
+        self.search_group_box = QGroupBox()
 
+        # Button to go to current item
         self.current_button = QPushButton("Current Item", parent=self.search_group_box)
         self.current_button.clicked.connect(self.current)
 
+        # Search entry box
         self.query = QLineEdit()
         self.query.setClearButtonEnabled(True)
         self.query.setPlaceholderText("Search...")
         self.query.textChanged.connect(self.search)
 
+        # The results of the search, which is hidden until there are results
         self.query_results = QLabel()
         self.query_results.hide()
+
+        # A button to go to the previous result, which is hidden until there are results
         self.previous_button = QPushButton("Previous", parent=self.search_group_box)
         self.previous_button.setDefault(False)
         self.previous_button.setDisabled(True)
+        self.previous_button.clicked.connect(self.previous)
+        self.previous_button.hide()
+
+        # A button to go to the next result, which is hidden until there are results
         self.next_button = QPushButton("Next", parent=self.search_group_box)
         self.next_button.setDefault(False)
         self.next_button.setDisabled(True)
-        self.previous_button.clicked.connect(self.previous)
         self.next_button.clicked.connect(self.next)
+        self.previous_button.hide()
 
+        # Create a horizontal layout and add everything into it
         self.search_layout = QHBoxLayout()
 
         self.search_layout.addWidget(self.current_button)
@@ -71,22 +87,18 @@ class ToDoDialog(QDialog):
         self.search_layout.addWidget(self.next_button)
         self.search_group_box.setLayout(self.search_layout)
 
+        # Create a button for closing the window
         self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
-        # self.button_box.accepted.connect(self.accept)
         self.button_box.rejected.connect(lambda: self.setVisible(False))
 
+        # Create the vertical layout box to hold everything
         self.layout = QVBoxLayout()
 
-        self.table = self._create_data_model_table()
+        self.table = self.create_data_model_table()
         self.table.setModel(self.model)
         self.table.horizontalHeader().setSectionResizeMode(
             1, QHeaderView.ResizeMode.Stretch
         )
-
-        # if self.backup_status is not None:
-        #     self.backup_status.signals.files_updated.connect(
-        #         self.model.update_display_cache
-        #     )
 
         self.setSizeGripEnabled(True)
         self.layout.addWidget(self.search_group_box)
@@ -94,33 +106,38 @@ class ToDoDialog(QDialog):
         self.layout.addWidget(self.button_box)
         self.setLayout(self.layout)
 
-        # if self.backup_status is not None:
-        #     self.backup_status.signals.files_updated.connect(self.update_display_cache)
-
-        # self.update_display_cache()
-
-    # def update_display_cache(self):
-    #     pass
-    #     # if self.isVisible():
-    #     #     self.model.update_display_cache()
-
     def current(self):
-        index = CurrentState.ToDoList[CurrentState.CurrentFile][ToDoColumns.IndexCount]
-        model_index = self.model.index(index, 0)
-        self.table.scrollTo(
-            model_index,
-            hint=QAbstractItemView.ScrollHint.PositionAtCenter,
-        )
+        """
+        Go to the current item
+        """
+        try:
+            index = CurrentState.ToDoList[CurrentState.CurrentFile][
+                ToDoColumns.IndexCount
+            ]
+            model_index = self.model.index(index, 0)
+            self.table.scrollTo(
+                model_index,
+                hint=QAbstractItemView.ScrollHint.PositionAtCenter,
+            )
+        except KeyError:
+            return
 
     def search(self, search_string: str):
-        # self.table.setCurrentItem(None)
+        """
+        This method is called whenever the text in the search box is changed
+        :param search_string: the contents of the search
+        """
         if not search_string:
             # Empty string, don't search.
             self.previous_button.setDisabled(True)
             self.next_button.setDisabled(True)
             self.query_results.hide()
+            self.previous_button.hide()
+            self.next_button.hide()
             return
 
+        # Get the matching rows, based on the filename column, though cap it
+        # at 1,000 items
         self.matching_indexes = self.model.match(
             self.model.index(0, 1),
             Qt.ItemDataRole.DisplayRole,
@@ -128,15 +145,14 @@ class ToDoDialog(QDialog):
             hits=1000,
             flags=Qt.MatchFlag.MatchContains,
         )
-        # key_list = (
-        #     self.backup_status.backup_status.to_do.to_do_file_list.file_dict.keys()
-        # )
-        if self.matching_indexes:
-            self.query_results.setText(self.get_label_string())
 
+        if self.matching_indexes:
+            # Show the number of matches
+            self.query_results.setText(self.get_label_string())
             self.query_results.show()
-            # we have found something
-            index = self.matching_indexes[0]  # take the first
+
+            # Go to the first item
+            index = self.matching_indexes[0]
             self.table.scrollTo(
                 index, hint=QAbstractItemView.ScrollHint.PositionAtCenter
             )
@@ -144,12 +160,17 @@ class ToDoDialog(QDialog):
             self.previous_button.setDisabled(False)
             self.previous_button.setDefault(False)
             self.next_button.setDisabled(False)
+            self.previous_button.show()
+            self.next_button.show()
         else:
             self.query_results.setText("No matches")
             self.previous_button.setDisabled(True)
             self.next_button.setDisabled(True)
 
     def next(self):
+        """
+        Go to the next matching item. If we go past the last one, wrap.
+        """
         next_item = self.current_matching_index + 1
         if len(self.matching_indexes) <= next_item:
             next_item = 0
@@ -162,6 +183,9 @@ class ToDoDialog(QDialog):
         self.query_results.setText(self.get_label_string())
 
     def previous(self):
+        """
+        Go to the previous matching item. If we go past the first one, wrap.
+        """
         previous_item = self.current_matching_index - 1
         if previous_item < 0:
             previous_item = len(self.matching_indexes) - 1
@@ -174,12 +198,19 @@ class ToDoDialog(QDialog):
         self.query_results.setText(self.get_label_string())
 
     def get_label_string(self):
+        """
+        Create the label string, which is the number of matches, and the currently
+        matched item.
+        """
         return (
             f"{len(self.matching_indexes):,} matches ("
             f"{self.current_matching_index + 1:,})"
         )
 
-    def _create_data_model_table(self) -> QTableView:
+    def create_data_model_table(self) -> QTableView:
+        """
+        Create the table with the file data
+        """
         data_model_table = QTableView(self)
         data_model_table.setObjectName("DialogModelTable")
         data_model_table.setShowGrid(False)
@@ -189,6 +220,7 @@ class ToDoDialog(QDialog):
         )
         size_policy.setHeightForWidth(False)
         data_model_table.setSizePolicy(size_policy)
+
         # Table will fit the screen horizontally
         data_model_table.horizontalHeader().setStretchLastSection(False)
         data_model_table.horizontalHeader().setSectionResizeMode(
