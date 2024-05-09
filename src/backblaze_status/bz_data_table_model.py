@@ -204,19 +204,19 @@ class BzDataTableModel(QAbstractTableModel):
                         result = len(row_data[ToDoColumns.PreparedChunks])
                         if result == 0:
                             return
-                        return result
+                        return f"{result:,}"
 
                     case ToDoColumns.TransmittedChunksCount:
                         result = len(row_data[ToDoColumns.TransmittedChunks])
                         if result == 0:
                             return
-                        return result
+                        return f"{result:,}"
 
                     case ToDoColumns.DedupedChunksCount:
                         result = len(row_data[ToDoColumns.DedupedChunks])
                         if result == 0:
                             return
-                        return result
+                        return f"{result:,}"
 
                     case ToDoColumns.FileSize:
                         return file_size_string(row_data[ToDoColumns.FileSize])
