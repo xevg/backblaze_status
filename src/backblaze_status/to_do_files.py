@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
+from icecream import ic
+from readerwriterlock import rwlock
+
 import pandas as pd
 from PyQt6.QtCore import QTimer, QReadWriteLock, QObject, pyqtSignal, pyqtSlot, QThread
 from pandas import DataFrame
@@ -13,19 +16,7 @@ from pandas import DataFrame
 from .configuration import Configuration
 from .constants import ToDoColumns, Key, MessageTypes, States
 from .current_state import CurrentState
-from .locks import Lock
 from .utils import MultiLogger, file_size_string
-
-
-def debug_print(message: str):
-    thread_name = threading.current_thread().name
-    date = f'{datetime.now().strftime("%Y-%m-%d %H:%M:%S")} <{thread_name}>'
-
-    print(f"{date} {message}")
-
-
-class NotFound(Exception):
-    pass
 
 
 class ToDoFiles(QObject):
@@ -52,32 +43,24 @@ class ToDoFiles(QObject):
         self._multi_log.log("Creating ToDoFiles")
 
         # An instance of the QTBackupStatus
-        self.backup_status: "QTBackupStatus" = backup_status
+        self.backup_status: QTBackupStatus = backup_status
 
         # Lock object
-        self.lock: QReadWriteLock = QReadWriteLock(
-            recursionMode=QReadWriteLock.RecursionMode.Recursive
-        )
+        self.lock: rwlock.RWLock = rwlock.RWLockFair()
 
         self.to_do_list: Optional[DataFrame] = None
 
-        # The _completed_files class contains the list of completed files
-        # self._completed_file_list: BackupFileList = BackupFileList()
-
         # Storage for the modification time of the current to do file
-        self._file_modification_time: float = 0.0
+        self.file_modification_time: float = 0.0
 
         # The current run
-        self._current_run: int = 1
+        self.current_run: int = 1
 
         # Storage for the current to_do file
-        self._to_do_file_name: str = ""
+        self.to_do_file_name: str = ""
+        self.previous_file = None
 
-        # The first file I process off the to do list. This is so that I can accurately
-        # assess the rate
-
-        self._reread_file_timer: Optional[QTimer] = None
-        self._stats_timer: Optional[QTimer] = None
+        self.reread_file_timer: Optional[QTimer] = None
 
         self.first_pass = True
 
@@ -90,9 +73,10 @@ class ToDoFiles(QObject):
 
         CurrentState.StartTime = datetime.now()
 
-        self.previous_file = None
-
     def run(self):
+        """
+        Run the ToDoFiles thread
+        """
         threading.current_thread().name = QThread.currentThread().objectName()
 
         # Setup signals
@@ -103,53 +87,68 @@ class ToDoFiles(QObject):
         # Start a thread that checks to see if the to_do file has changed, and if it
         # has, re-read it
 
-        self._reread_file_timer = QTimer(self)
-        self._reread_file_timer.timeout.connect(self.reread_to_do_list)
-        self._reread_file_timer.start(60000)  # Fire every 60 seconds
+        self.reread_file_timer = QTimer(self)
+        self.reread_file_timer.timeout.connect(self.reread_to_do_list)
+        self.reread_file_timer.start(60000)  # Fire every 60 seconds
 
+        # Let everyone know that we've read the to do file
         self.backup_status.signals.to_do_available.emit()
 
     def __len__(self) -> int:
+        """
+        Return the total number of files on the to do list
+        """
         if self.to_do_list is None:
             return 0
         else:
             return self.to_do_list.shape[0]
 
-    def read(self, read_existing_file: bool = False) -> None:
+    def read(self) -> None:
         """
-        This reads the to_do file and stores it in two data structures,
-          - a dictionary so that I can find the file, and
-          - a list, so that I can see what the next files are
+        This reads the to_do file and stores it in two data structures, a DataFrame
+        and a dictionary.
 
-          The structure of the file that I care about are the 6th field,
-          which is the filename, and the fifth field, which is the file size.
+
         :return:
         """
 
-        self._to_do_file_name = self.get_to_do_file()
+        self.to_do_file_name = self.get_to_do_file()
         file_index = {}
-        with Lock.DB_LOCK:
+
+        # Try stat-ing the file. If it doesn't succeed, then mark the backup as not
+        # running and return
+        with self.lock.gen_wlock():
             try:
-                file = Path(self._to_do_file_name)
+                file = Path(self.to_do_file_name)
                 stat = file.stat()
-                self._file_modification_time = stat.st_mtime
+                self.file_modification_time = stat.st_mtime
             except FileNotFoundError:
-                self._mark_backup_not_running()
-                self._file_modification_time = 0
+                self.mark_backup_not_running()
+                self.file_modification_time = 0
                 return
 
+            # If we are here, then the backup is running, so let everyone know
             CurrentState.BackupRunning = True
             self.backup_status.signals.backup_running.emit(True)
 
             count = -1
             to_do_list = []
             try:
+                # Read the lines of the file, process them, and store them in a list
                 with open(file, "r") as tdf:
                     for todo_line in tdf:
                         count += 1
+                        # The structure of the file that I care about are the 6th field,
+                        # which is the filename, and the fifth field, which is the
+                        # file size.
                         todo_fields = todo_line.strip().split("\t")
                         todo_filename = todo_fields[5]
                         file_path = Path(todo_filename)
+
+                        # Check to see if the file exists. If it doesn't, mark the
+                        # file as skipped, otherwise mark it as unprocessed. If I
+                        # can't access the file because of permissions, assume it is
+                        # unprocessed.
                         try:
                             if not file_path.exists():
                                 state = Key.Skipped
@@ -162,7 +161,9 @@ class ToDoFiles(QObject):
 
                         todo_file_size = int(todo_fields[4])
 
-                        # backup = BackupFile(todo_filename, todo_file_size)
+                        # If the file is over a specific size, then it will be broken
+                        # up into chunks. The chunk size is 10MB, so it's easy to
+                        # figure out the number of chunks for that file
                         total_chunk_count = 0
                         is_large_file = False
                         if todo_file_size > Configuration.default_chunk_size:
@@ -170,6 +171,8 @@ class ToDoFiles(QObject):
                                 todo_file_size / Configuration.default_chunk_size
                             )
                             is_large_file = True
+
+                        # Add a row that has the list of all the data for the file
                         to_do_list.append(
                             [
                                 count,
@@ -192,8 +195,12 @@ class ToDoFiles(QObject):
                                 0,  # PreparedChunksCount
                             ]
                         )
+                        # In order to map back from a row index to the file, I create
+                        # a file_index pointing to the filename
                         file_index[count] = todo_filename
 
+                # Now that I have the entire to do list, I create a DataFrame to
+                # allow for querying and aggregating
                 self.to_do_list = DataFrame(
                     to_do_list,
                     columns=[
@@ -217,6 +224,8 @@ class ToDoFiles(QObject):
                         ToDoColumns.PreparedChunksCount,
                     ],
                 ).set_index(ToDoColumns.FileName)
+
+                # Save the file index
                 CurrentState.FileIndex = file_index
 
                 # Remove duplicates, keeping only the last one
@@ -224,20 +233,19 @@ class ToDoFiles(QObject):
                     ~self.to_do_list.index.duplicated(keep="last")
                 ]
 
-                # if read_existing_file:
-                #     self._multi_log.log(
-                #         f"Added {count:,} lines from To Do file after"
-                #         f" re-reading {self._to_do_file_name}"
-                #     )
-                # else:
                 self._multi_log.log(
-                    f"Read {count:,} lines from To Do file" f" {self._to_do_file_name}"
+                    f"Read {count:,} lines from To Do file" f" {self.to_do_file_name}"
                 )
+                # In order to save the overhead of accessing the DataFrame each time,
+                # which is a lot of overhead, I convert the DataFrame to a
+                # dictionary, but I save both of them for further manipulation later
                 CurrentState.ToDoList = self.to_do_list.to_dict(orient="index")
                 CurrentState.ToDoListLength = len(self.to_do_list.index)
 
+                # Announce that the backup is now running, and that the to do list
+                # has been read
                 self.backup_status.signals.backup_running.emit(True)
-
+                CurrentState.ToDoFileRead = True
                 self.backup_status.signals.to_do_available.emit()
             except Exception as exp:
                 print(exp)
@@ -247,62 +255,80 @@ class ToDoFiles(QObject):
         """
         Checks to see if there is a new to_do file, and if there is, reread it
         """
-        self._to_do_file_name = self.get_to_do_file()
-        if not CurrentState.BackupRunning and self._to_do_file_name is not None:
-            # If the backup is not running already, and there is a new to_do
-            # file, then read it after incrementing the run number
-            self._current_run += 1
+        self.to_do_file_name = self.get_to_do_file()
+
+        # If the backup is not running already, and there is a new to_do
+        # file, then read it after incrementing the run number
+        if not CurrentState.BackupRunning and self.to_do_file_name is not None:
+            self.current_run += 1
             self.read()
             return
 
-        if not CurrentState.BackupRunning and self._to_do_file_name is None:
-            self._multi_log.log(
-                f"Backup not running. Waiting for 1 minute and trying again ..."
-            )
+        # If the backup is not running, the wait and try again later
+        if not CurrentState.BackupRunning and self.to_do_file_name is None:
+            self.mark_backup_not_running()
+            self._multi_log.log(f"Backup not running. Waiting and trying again ...")
             return
 
         # If the backup is running and the to_do file name is not None, then see
         # if we need to re-read the file because there is new data in it
-        if CurrentState.BackupRunning and self._to_do_file_name is not None:
+        if CurrentState.BackupRunning and self.to_do_file_name is not None:
             try:
-                file = Path(self._to_do_file_name)
+                file = Path(self.to_do_file_name)
                 stat = file.stat()
             except FileNotFoundError:
                 # If there is no file, then the backup is complete, then mark it
                 # as complete
                 if CurrentState.BackupRunning:
-                    self._mark_backup_not_running()
+                    self.mark_backup_not_running()
                 return
 
             # Check to see if the modification time has changed. If it has,
             # then reread the file.
 
-            if self._file_modification_time != stat.st_mtime:
+            if self.file_modification_time != stat.st_mtime:
                 self._multi_log.log("To Do file changed, rereading")
-                self.read(read_existing_file=True)
+                self.read()
             else:
-                self._multi_log.log("To Do file has not changed")
+                ic("To Do file has not changed")
 
     @pyqtSlot(dict)
-    def get_emit_messages(self, message_data: dict):
-        self.process_received_message(message_data)
+    def get_emit_messages(self, message_data: dict) -> None:
 
-    def process_received_message(self, message_data: dict) -> None:
         prefix = f"Message Received ({message_data['publish_count']:>8,}):"
 
+        # If the current file is not set, and I get a new filename, then set the
+        # current file and also run a post_initialize to clean everything up,
+        # now that I know where we are in the backup. If the to do file isn't ready
+        # yet, then I sleep for 5 seconds and try again
         if (
             CurrentState.CurrentFile is None
             and message_data["data"].get(Key.FileName) is not None
         ):
+            if not CurrentState.ToDoFileRead:
+                retry_timer = QTimer()
+                retry_timer.timeout.connect(
+                    lambda: self.get_emit_messages(message_data)
+                )
+                retry_timer.setSingleShot(True)
+                retry_timer.start(5000)
+                return
+
             CurrentState.CurrentFile = message_data["data"][Key.FileName]
             self.post_initialize_to_do_list(CurrentState.CurrentFile)
 
-        match message_data["type"]:
+        # Since I access the file name a lot, set it once
+        try:
+            file_name = message_data["data"][Key.FileName]
+            to_do_row = CurrentState.ToDoList[file_name]
+        except KeyError:
+            return
 
+        # Now match the type of message
+        match message_data["type"]:
             case MessageTypes.StartNewFile:
                 # This lets me know that new file has started, and it is now
                 # the current file
-                file_name = message_data["data"][Key.FileName]
                 start_time = message_data["data"][Key.StartTime]
                 self._multi_log.log(
                     f"{prefix} File Started: " f"{file_name}",
@@ -312,9 +338,8 @@ class ToDoFiles(QObject):
 
             case MessageTypes.Completed:
                 # When the files are completed, mark it as completed
-                file_name = message_data["data"][Key.FileName]
                 end_time = message_data["data"][Key.EndTime]
-                file_size = CurrentState.ToDoList[file_name][ToDoColumns.FileSize]
+                file_size = to_do_row[ToDoColumns.FileSize]
 
                 self._multi_log.log(
                     f"{prefix} File Completed: "
@@ -325,8 +350,7 @@ class ToDoFiles(QObject):
                 self.complete_file(file_name, end_time)
 
             case MessageTypes.IsDeduped:
-                # When the files are completed, mark it as completed
-                file_name = message_data["data"][Key.FileName]
+                # Add a deduped file
                 self._multi_log.log(
                     f"{prefix} File Deduped: {file_name}",
                     module=self._module_name,
@@ -335,8 +359,9 @@ class ToDoFiles(QObject):
                 self.set_value(file_name, ToDoColumns.IsDeduped, True)
 
             case MessageTypes.AddTransmittedChunk:
-                # When the files are completed, mark it as completed
-                file_name = message_data["data"][Key.FileName]
+                # Process a new transmitted chunk. First, set the state to
+                # Transmitting, then update the current chunk transmitted count,
+                # then update the stat box and chunk progress box
                 chunk = message_data["data"][Key.Chunk]
                 self._multi_log.log(
                     f"{prefix} Transmitted chunk {chunk} for {file_name}",
@@ -347,7 +372,7 @@ class ToDoFiles(QObject):
                 self.append_value(file_name, ToDoColumns.TransmittedChunks, chunk)
 
                 CurrentState.CurrentTransmittedChunks = len(
-                    CurrentState.ToDoList[file_name][ToDoColumns.TransmittedChunks]
+                    to_do_row[ToDoColumns.TransmittedChunks]
                 )
                 CurrentState.ToDoList[CurrentState.CurrentFile][
                     ToDoColumns.TransmittedChunksCount
@@ -365,8 +390,10 @@ class ToDoFiles(QObject):
                 self.backup_status.signals.update_stats_box.emit()
 
             case MessageTypes.AddDedupedChunk:
-                # When the files are completed, mark it as completed
-                file_name = message_data["data"][Key.FileName]
+                # Process a new duplicated chunk. First, set the state to
+                # Transmitting, then update the current chunk duplicated count,
+                # then update the stat box and chunk progress box
+
                 chunk = message_data["data"][Key.Chunk]
                 self._multi_log.log(
                     f"{prefix} Deduped chunk {chunk} for {file_name}",
@@ -393,8 +420,9 @@ class ToDoFiles(QObject):
                 self.backup_status.signals.update_stats_box.emit()
 
             case MessageTypes.AddPreparedChunk:
-                # When the files are completed, mark it as completed
-                file_name = message_data["data"][Key.FileName]
+                # Process a new duplicated chunk. First, set the state to
+                # Preparing, then update the current chunk prepared count,
+                # then update the chunk progress box
                 chunk = message_data["data"][Key.Chunk]
                 self._multi_log.log(
                     f"{prefix} Prepared chunk {chunk} for {file_name}",
@@ -406,7 +434,7 @@ class ToDoFiles(QObject):
 
                 CurrentState.ToDoList[CurrentState.CurrentFile][
                     ToDoColumns.PreparedChunksCount
-                ] = len(CurrentState.ToDoList[file_name][ToDoColumns.PreparedChunks])
+                ] = len(to_do_row[ToDoColumns.PreparedChunks])
 
                 self.add_to_value(
                     file_name,
@@ -424,6 +452,12 @@ class ToDoFiles(QObject):
                 )
 
     def post_initialize_to_do_list(self, file_name: str):
+        """
+        After the to do file is done, and I set the current file, clean up the list.
+        Anything before the current file at the start is marked as PreCompleted. The
+        rest are labeled as Unprocessed, unless they were already skipped because
+        they don't exist
+        """
         index_count = self.to_do_list.at[file_name, ToDoColumns.IndexCount]
         self.to_do_list[ToDoColumns.State] = self.to_do_list.apply(
             lambda row: (
@@ -439,11 +473,13 @@ class ToDoFiles(QObject):
         )
 
         self.update_stats()
-
         self.backup_status.signals.go_to_current_row.emit()
 
     @pyqtSlot()
     def update_to_do_list(self):
+        """
+        Update the to mark unprocessed files before the current file to skipped
+        """
         current_index = self.to_do_list.at[
             CurrentState.CurrentFile, ToDoColumns.IndexCount
         ]
@@ -456,15 +492,12 @@ class ToDoFiles(QObject):
             ),
             axis=1,
         )
-        # skipped = self.to_do_list[
-        #     (self.to_do_list[ToDoColumns.IndexCount] < current_index)
-        #     & (self.to_do_list[ToDoColumns.State] == Key.Unprocessed)
-        # ]
-        # for filename in skipped.index:
-        #     self.set_value(filename, ToDoColumns.State, Key.Skipped)
         self.update_stats()
 
     def update_stats(self):
+        """
+        Do all the calculations to update the stats
+        """
         CurrentState.TotalFilesPreCompleted = int(
             self.to_do_list[self.to_do_list[ToDoColumns.State] == Key.PreCompleted][
                 ToDoColumns.IndexCount
@@ -514,11 +547,9 @@ class ToDoFiles(QObject):
         )
 
         self.total_files = int(self.to_do_list[ToDoColumns.IndexCount].count())
-        # self.backblaze_redis.total_files = self.total_files
         CurrentState.TotalFiles = self.total_files
 
         self.total_bytes = float(self.to_do_list[ToDoColumns.FileSize].sum())
-        # self.backblaze_redis.total_size = self.total_bytes
         CurrentState.TotalBytes = self.total_bytes
 
         CurrentState.TotalChunks = int(self.to_do_list[ToDoColumns.ChunkCount].sum())
@@ -528,7 +559,6 @@ class ToDoFiles(QObject):
                 ToDoColumns.IndexCount
             ].count()
         )
-        # self.backblaze_redis.total_files_to_process = self.total_files_to_process
         CurrentState.TotalFilesToProcess = self.total_files_to_process
 
         self.total_bytes_to_process = float(
@@ -536,13 +566,15 @@ class ToDoFiles(QObject):
                 ToDoColumns.FileSize
             ].sum()
         )
-        # self.backblaze_redis.total_size_to_process = self.total_bytes_to_process
         CurrentState.TotalBytesToProcess = self.total_bytes_to_process
 
         CurrentState.ToDoList = self.to_do_list.to_dict(orient="index")
         CurrentState.ToDoListLength = self.to_do_list.shape[0]
 
     def start_new_file(self, file_name: str, start_time: datetime) -> None:
+        """
+        Called when a new file is started, sets the current file and resets chunks
+        """
         if self.previous_file is not None and self.previous_file != file_name:
             self.complete_file(self.previous_file, datetime.now())
 
@@ -559,6 +591,10 @@ class ToDoFiles(QObject):
         self.backup_status.signals.start_new_file.emit(file_name)
 
     def complete_file(self, file_name: str, end_time: datetime):
+        """
+        Called when a file is complete. I update the to do list, set some final
+        values, determine if it's deduped or not, and calculate the progress
+        """
         self.update_to_do_list()
 
         if self.previous_file is not None and self.previous_file == file_name:
@@ -723,6 +759,10 @@ class ToDoFiles(QObject):
         self.backup_status.signals.update_stats_box.emit()
 
     def set_value(self, file_name: str, column: str, value):
+        """
+        A wrapper function to update both the DataFrame and the dict, for setting
+        variables
+        """
         try:
             self.to_do_list.at[file_name, column] = value
             CurrentState.ToDoList[file_name][column] = value
@@ -731,6 +771,10 @@ class ToDoFiles(QObject):
             pass
 
     def append_value(self, file_name: str, column: str, value):
+        """
+        A wrapper function to update both the DataFrame and the dict, for setting
+        list
+        """
         try:
             self.to_do_list.at[file_name, column].add(value)
             CurrentState.ToDoList[file_name][column].add(value)
@@ -738,11 +782,18 @@ class ToDoFiles(QObject):
             pass
 
     def add_to_value(self, file_name: str, column: str, value):
+        """
+        A wrapper function to update both the DataFrame and the dict, for adding to
+        existing values
+        """
         self.to_do_list.at[file_name, column] += value
         CurrentState.ToDoList[file_name][column] += value
 
-    def _mark_backup_not_running(self):
-        self._multi_log.log("Backup Complete")
+    def mark_backup_not_running(self):
+        """
+        When the backup completes
+        """
+        # self._multi_log.log("Backup Complete")
         CurrentState.BackupRunning = False
         CurrentState.CurrentFile = None
         self.backup_status.signals.backup_running.emit(False)
@@ -762,6 +813,7 @@ class ToDoFiles(QObject):
             # If there is no to_do file, that is because the backup process is not
             # running, so we will sleep and try again.
             if not to_do_file:
+                self.mark_backup_not_running()
                 self._multi_log.log(
                     f"Backup not running. Waiting for 1 minute and trying again ..."
                 )
