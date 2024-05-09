@@ -262,9 +262,9 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         Show the chunk dialog when the show button is clicked
         """
         ic("Show chunk button clicked")
-        self.chunk_show_dialog_button.show()
-        self.chunk_show_dialog_button.activateWindow()
-        self.chunk_show_dialog_button.raise_()
+        self.chunk_table_dialog_box.show()
+        self.chunk_table_dialog_box.activateWindow()
+        self.chunk_table_dialog_box.raise_()
 
     def pop_up_todo(self, _):
         """
@@ -644,32 +644,35 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         """
         ic(f"start_new_file({file_name})")
 
-        # If the current file is a large file, then hide the file_info box and
-        # replace it with the chunk box
-        if CurrentState.ToDoList[file_name][ToDoColumns.IsLargeFile]:
+        try:
+            # If the current file is a large file, then hide the file_info box and
+            # replace it with the chunk box
+            if CurrentState.ToDoList[file_name][ToDoColumns.IsLargeFile]:
 
-            self.file_info.hide()
-            self.chunk_box.show()
+                self.file_info.hide()
+                self.chunk_box.show()
 
-            chunks = CurrentState.ToDoList[file_name][ToDoColumns.ChunkCount]
+                chunks = CurrentState.ToDoList[file_name][ToDoColumns.ChunkCount]
 
-            # Reset the chunk progress bars
-            self.transmit_chunk_progress_bar.setValue(0)
-            self.transmit_chunk_progress_bar.setMaximum(chunks)
-            self.prepare_chunk_progress_bar.setValue(0)
-            self.prepare_chunk_progress_bar.setMaximum(chunks)
+                # Reset the chunk progress bars
+                self.transmit_chunk_progress_bar.setValue(0)
+                self.transmit_chunk_progress_bar.setMaximum(chunks)
+                self.prepare_chunk_progress_bar.setValue(0)
+                self.prepare_chunk_progress_bar.setMaximum(chunks)
 
-            # Reset the chunk table
-            self.chunk_model.reset_table()
-            if self.chunk_model.use_dialog:
-                self.use_chunk_dialog()
+                # Reset the chunk table
+                self.chunk_model.reset_table()
+                if self.chunk_model.use_dialog:
+                    self.use_chunk_dialog()
+                else:
+                    self.use_chunk_box()
+
             else:
-                self.use_chunk_box()
-
-        else:
-            self.chunk_box.hide()
-            self.file_info.show()
-            self.file_info.setText(f"Sending file {file_name}")
+                self.chunk_box.hide()
+                self.file_info.show()
+                self.file_info.setText(f"Sending file {file_name}")
+        except KeyError:
+            return
 
     def use_chunk_dialog(self):
         """
@@ -683,21 +686,18 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         self.chunk_show_dialog_button.show()
         self.chunk_show_dialog_button.setEnabled(True)
 
-        self.chunk_table_dialog_box.resizeRowsToContents()
-        self.chunk_table_dialog_box.resizeColumnsToContents()
+        chunk_table = self.chunk_table_dialog_box.dialog_chunk_table
+        chunk_table.resizeRowsToContents()
+        chunk_table.resizeColumnsToContents()
 
-        self.chunk_table_dialog_box.setVerticalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        self.chunk_table_dialog_box.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        chunk_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        chunk_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self.chunk_table_dialog_box.setFixedWidth(
-            self.chunk_box_table.horizontalHeader().length()
+            chunk_table.horizontalHeader().length()
         )
         self.chunk_table_dialog_box.setFixedHeight(
-            self.chunk_box_table.verticalHeader().length()
+            chunk_table.verticalHeader().length()
         )
 
     def use_chunk_box(self):
