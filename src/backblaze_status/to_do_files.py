@@ -364,7 +364,7 @@ class ToDoFiles(QObject):
                 # then update the stat box and chunk progress box
                 chunk = message_data["data"][Key.Chunk]
                 self._multi_log.log(
-                    f"{prefix} Transmitted chunk {chunk} for {file_name}",
+                    f"{prefix} Transmitted chunk {chunk:,} for {file_name}",
                     module=self._module_name,
                     # level=logging.DEBUG,
                 )
@@ -396,7 +396,7 @@ class ToDoFiles(QObject):
 
                 chunk = message_data["data"][Key.Chunk]
                 self._multi_log.log(
-                    f"{prefix} Deduped chunk {chunk} for {file_name}",
+                    f"{prefix} Deduped chunk {chunk:,} for {file_name}",
                     module=self._module_name,
                     # level=logging.DEBUG,
                 )
@@ -420,12 +420,12 @@ class ToDoFiles(QObject):
                 self.backup_status.signals.update_stats_box.emit()
 
             case MessageTypes.AddPreparedChunk:
-                # Process a new duplicated chunk. First, set the state to
+                # Process a new prepared chunk. First, set the state to
                 # Preparing, then update the current chunk prepared count,
                 # then update the chunk progress box
                 chunk = message_data["data"][Key.Chunk]
                 self._multi_log.log(
-                    f"{prefix} Prepared chunk {chunk} for {file_name}",
+                    f"{prefix} Prepared chunk {chunk:,} for {file_name}",
                     module=self._module_name,
                     # level=logging.DEBUG,
                 )
