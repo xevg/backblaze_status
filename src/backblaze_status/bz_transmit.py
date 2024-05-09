@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from file_read_backwards import FileReadBackwards
 
 from .constants import Key, MessageTypes
 from .qt_backup_status import QTBackupStatus
@@ -31,6 +32,9 @@ class BzTransmit:
     publish_count: int = field(default=0, init=False)
     current_filename: Path | None = field(default=None, init=False)
     first_pass: bool = field(default=True, init=False)
+    last_file_started: str = field(default=None, init=False)
+    last_file_started_time: datetime = field(default=None, init=False)
+
     BZ_LOG_DIR: str = field(
         default="/Library/Backblaze.bzpkg/bzdata/bzlogs/bztransmit",
         init=False,
@@ -41,7 +45,7 @@ class BzTransmit:
             "BzTransmit", terminal=True, qt=self.backup_status
         )
         self._module_name = self.__class__.__name__
-        self._multi_log.log("Starting BzTransmit")
+        self._multi_log.log("Starting BzTransmit", module=self._module_name)
 
         # Compile search terms
         # Compile the match for prepare large file search
@@ -78,7 +82,7 @@ class BzTransmit:
                         last_file = _file
         return last_file
 
-    def process_line(self, _line: str) -> None:
+    def process_line(self, _line: str) -> bool:
         """
         Process each line in the log file
         :param _line: the read line
@@ -95,6 +99,9 @@ class BzTransmit:
         # When this matches it means that there a new large file being backed up
         match_result = self.prepare_match_re.match(_line)
         if match_result is not None:
+            _filename = Path(_line.split(": ")[-1].rstrip())
+            filename = str(_filename)
+
             if _line[4] == "-":
                 # The transmit file uses UTC time
                 _timestamp = _line[0:19]
@@ -110,8 +117,13 @@ class BzTransmit:
                     .replace(tzinfo=timezone.utc)
                     .astimezone(tz=None)
                 )
-            _filename = Path(_line.split(": ")[-1].rstrip())
-            filename = str(_filename)
+
+            # If this is the first time through the file, just search for the last
+            # file that I am processing
+            if self.first_pass:
+                self.last_file_started = filename
+                self.last_file_started_time = _datetime
+                return True
 
             self.emit_message(
                 MessageTypes.StartNewFile,
@@ -128,6 +140,7 @@ class BzTransmit:
             chunk_number = int(_dedup_search_results.group(1))
             _filename = Path(_line.split(": ")[-1].rstrip())
             filename = str(_filename)
+
             _timestamp = _line[0:19]
             if _timestamp[4] == "-":
                 # The transmit file uses UTC time
@@ -144,11 +157,20 @@ class BzTransmit:
                     .astimezone(tz=None)
                 )
 
+            # If this is the first time through the file, just search for the last
+            # file that I am processing
+            if self.first_pass:
+                self.last_file_started = filename
+                self.last_file_started_time = _datetime
+                return True
+
             self.emit_message(
                 MessageTypes.AddDedupedChunk,
                 f"Add deduped chunk {chunk_number} to {filename}",
                 {Key.FileName: filename, Key.Chunk: chunk_number},
             )
+
+        return False
 
     def emit_message(self, message_type: str, message_string: str, data: dict) -> None:
         """
@@ -174,21 +196,46 @@ class BzTransmit:
         log_file = self.get_latest_logfile_name()
         self.current_filename = log_file
         while True:
+            if self.first_pass:
+                with FileReadBackwards(log_file, encoding="utf-8") as frb:
+                    while True:
+                        line = frb.readline()
+                        if not line:
+                            break
+                        found_name = self.process_line(line)
+                        if found_name:
+                            break
+                self.emit_message(
+                    MessageTypes.StartNewFile,
+                    f"New file is {self.last_file_started}",
+                    {
+                        Key.FileName: self.last_file_started,
+                        Key.StartTime: self.last_file_started_time,
+                    },
+                )
+                self._multi_log.log(f"Set current file to {self.last_file_started}")
+            file_count = 0
             with log_file.open("r") as log_fd:
                 self._multi_log.log(f"Reading file {log_file}")
-                # If this is the first time through, skip to the end of the file
+                # If this is the first time through, we've already gotten the name of
+                # the processing file, so skip to the end of the file
                 if self.first_pass:
                     self.first_pass = False
                     log_fd.seek(0, 2)
                 while True:
+                    file_count += 1
+
                     line = log_fd.readline()
 
-                    if not line:
-                        time.sleep(0.5)
-                        new_filename = self.get_latest_logfile_name()
-                        if new_filename != self.current_filename:
-                            break
-                        continue
+                    if line:
+                        self.process_line(line)
+                    else:
+                        if not line:
+                            time.sleep(0.5)
+                            new_filename = self.get_latest_logfile_name()
+                            if new_filename != self.current_filename:
+                                break
+                            continue
 
             log_file = self.get_latest_logfile_name()
             self.current_filename = log_file
