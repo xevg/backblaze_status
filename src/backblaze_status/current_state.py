@@ -17,6 +17,7 @@ class CurrentState:
     ToDoListLength: int = 0
     FileIndex: dict = {}
     BackupRunning: bool = False
+    ToDoFileRead: bool = False
 
     TotalFiles: int = 0
     TotalBytes: float = 0.0
