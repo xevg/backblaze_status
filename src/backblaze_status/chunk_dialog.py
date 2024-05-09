@@ -26,7 +26,7 @@ class ChunkDialog(QDialog):
         self.chunk_table_dialog_layout.addWidget(self.dialog_chunk_table)
 
         self.setLayout(self.chunk_table_dialog_layout)
-        self.show()
+        self.setSizeGripEnabled(True)
 
     def create_chunk_table(self):
         """
@@ -40,10 +40,10 @@ class ChunkDialog(QDialog):
             QHeaderView.ResizeMode.Fixed
         )
         chunk_table.horizontalHeader().setVisible(False)
+
         chunk_table.verticalHeader().setMaximumSectionSize(2)
         chunk_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
         chunk_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-
         chunk_table.verticalHeader().setVisible(False)
         chunk_table.setShowGrid(False)
 
