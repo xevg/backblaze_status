@@ -7,6 +7,9 @@ from .qt_backup_status import QTBackupStatus
 
 
 class LastFilesTransmittedWorker(QObject):
+    """
+    The wrapper class to run LastFilesTransmitted as a separate thread
+    """
     def __init__(self, backup_status: QTBackupStatus):
         super(LastFilesTransmittedWorker, self).__init__()
 

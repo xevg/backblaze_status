@@ -7,6 +7,10 @@ from .qt_backup_status import QTBackupStatus
 
 
 class BzPrepareWorker(QObject):
+    """
+    The wrapper class to run BzPrepare as a separate thread
+    """
+
     def __init__(self, backup_status: QTBackupStatus):
         super(BzPrepareWorker, self).__init__()
 
