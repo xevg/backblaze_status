@@ -2,17 +2,11 @@ import inspect
 import logging
 import os
 import sys
-import threading
 from datetime import datetime
 from math import floor
 from pathlib import Path
 
-
-# from flipper import FeatureFlagClient, MemoryFeatureFlagStore
-from rich.console import Console
 from rich.text import Text
-from datetime import datetime
-from .configuration import Configuration
 
 DIVISOR_SIZE = 1024
 
@@ -54,9 +48,12 @@ class MultiLogger:
 
         Args:
             app_name (str): The name of the application.
-            logfile_dir (str, optional): The directory to store log files. Defaults to None.
-            default_log_level (int, optional): The default log level. Defaults to logging.INFO.
-            terminal (bool, optional): Whether to print log messages to the terminal. Defaults to False.
+            logfile_dir (str, optional): The directory to store log files.
+                Defaults to None.
+            default_log_level (int, optional): The default log level.
+                Defaults to logging.INFO.
+            terminal (bool, optional): Whether to print log messages to the terminal.
+                Defaults to False.
         """
         self._app_name = app_name
         if logfile_dir is None:
@@ -78,11 +75,6 @@ class MultiLogger:
         """
         Initialize the logger for the application.
 
-        Args:
-            app_name (str): The name of the application.
-            logfile_dir (str): The directory where the log file will be created.
-            default_log_level: The default log level to be used.
-
         Raises:
             FileNotFoundError: If the logfile_dir does not exist.
             PermissionError: If the logfile_dir is not writable.
@@ -93,7 +85,8 @@ class MultiLogger:
             or not os.access(self._logfile_dir, os.W_OK)
         ):
             raise FileNotFoundError(
-                f"Logfile directory does not exist or is not writable: {self._logfile_dir}"
+                f"Logfile directory does not exist "
+                f"or is not writable: {self._logfile_dir}"
             )
 
         logger = logging.getLogger(self._app_name)
@@ -134,15 +127,7 @@ class MultiLogger:
             module = inspect.stack()[1].function
 
         timestamp = datetime.now().strftime("%-I:%M:%S %p")
-        if self.qt:
-            html_log_string = (
-                f'<span style="color:yellow">{timestamp}</span> '
-                f'<span style="color:magenta"> ({module})</span> '
-                f'<span style="color:white"> {str(message)} </span> '
-            )
-            # self.qt.signals.update_log.emit(html_log_string)
-
-        elif self.rich_log:
+        if self.rich_log:
             rich_log_text = (
                 Text()
                 .from_markup(f"[yellow]{timestamp}[/] [purple] <{module}>[/] ")
@@ -153,55 +138,3 @@ class MultiLogger:
         message = str(message)
         log_message = f"<{module}> {message}"
         self.logger.log(level, log_message)
-
-
-def remove_directory(
-    directory: Path, console: Console
-) -> None:  # , logger: logging.Logger) -> None:
-    """
-    Try removing a directory. Because macOS puts in the .FF_Index file, it won't remove the directory, so first
-      try and delete the file, then try and delete the directory. In all cases it's ok to fail, so just don't return
-      anything
-    """
-    ff_index = directory / ".FF_Index"
-    ff_index.unlink(missing_ok=True)
-
-    try:
-        directory.rmdir()
-        # logger.info(f"Directory '{directory} has been removed successfully")
-        console.print(f"Directory '{directory} has been removed successfully")
-    except OSError:
-        # I don't care if it fails
-        pass
-
-    return
-
-
-def gb_divisor():
-    return Configuration.gb_divisor
-
-
-def tb_divisor():
-    return Configuration.tb_divisor
-
-
-_multi_log = MultiLogger(
-    "BzLastFilesTransmitted",
-    terminal=True,
-)
-
-
-def get_lock(lock: threading.Lock, name: str, where: str) -> datetime:
-    # if where.startswith("qt_b") or where.startswith("to"):
-    #    _multi_log.log(f"Getting lock for {name} from {where}", module="lock")
-    lock.acquire()
-    return datetime.now()
-
-
-def return_lock(lock: threading.Lock, name: str, where: str, start_time: datetime):
-    # if where.startswith("qt_b") or where.startswith("to"):
-    #    _multi_log.log(
-    #        f"Returning lock for {name} from {where} {datetime.now() - start_time}",
-    #        module="lock",
-    #    )
-    lock.release()
