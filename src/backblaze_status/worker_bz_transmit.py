@@ -10,6 +10,7 @@ class BZTransmitWorker(QObject):
     """
     The wrapper class to run BzTransmit as a separate thread
     """
+
     def __init__(self, backup_status: QTBackupStatus):
         super(BZTransmitWorker, self).__init__()
 
