@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "backblaze_status"
-version = "0.10.3"
+version = "0.12.7"
 description = "Looking at the state of the Backblaze backup"
 authors = ["Xev Gittler"]
 license = "MIT"
@@ -19,6 +19,7 @@ pytz = "^2024.1"
 sqlalchemy = "^2.0.29"
 readerwriterlock = "^1.0.9"
 pyobjc-framework-cocoa = "^10.2"
+file-read-backwards = "^3.1.0"
 
 [tool.poetry.dev-dependencies]
 

@@ -2,6 +2,122 @@
 
 
 
+## 0.12.7 (2024-05-09)
+
+### Fix
+
+- **ChunkDialog**: add resize option
+- **workers**: add comments and cleanup
+- **workers**: add comments and cleanup
+- **Utils**: add comments and cleanup
+- **ToDoFiles**: add comments and cleanup
+- **QtBackupStatus**: fix dialog box
+- **CurrentState**: Add flag for ToDo file read
+- **BzTransmit**: change how to get current file so I get it earlier
+- **BzDataTableModel**: add commas to field
+
+### Refactor
+
+- remove unnecessary files
+
+## 0.12.6 (2024-05-08)
+
+### Refactor
+
+- **ToDoDialogModel**: add comments and clean up
+
+## 0.12.5 (2024-05-08)
+
+### Refactor
+
+- **ToDoDialog**: add comments and clean up
+
+## 0.12.4 (2024-05-08)
+
+### Refactor
+
+- remove unnecessary files
+- **Signals**: add comments and clean up
+
+## 0.12.3 (2024-05-08)
+
+### Refactor
+
+- **QtMainWindow**: add comments and minor fixes
+
+## 0.12.2 (2024-05-08)
+
+### Refactor
+
+- **QtBackupStatus**: add comments and minor fixes
+
+## 0.12.1 (2024-05-08)
+
+### Refactor
+
+- **locks**: removed unnecessary files
+
+## 0.12.0 (2024-05-08)
+
+### Feat
+
+- **exceptions**: add comment
+
+## 0.11.0 (2024-05-08)
+
+### Feat
+
+- **CurrentState**: add locking
+
+### Refactor
+
+- add comments to constants.py
+
+## 0.10.9 (2024-05-08)
+
+### Refactor
+
+- comments and cleanup
+- comments and cleanup and minor fixes
+- comments and cleanup
+
+## 0.10.8 (2024-05-08)
+
+### Refactor
+
+- optimize imports
+- add comments and clean up
+
+## 0.10.7 (2024-05-08)
+
+### Refactor
+
+- add comments and clean up
+- optimize imports
+
+## 0.10.6 (2024-05-08)
+
+### Refactor
+
+- file no longer used
+
+## 0.10.5 (2024-05-08)
+
+### Refactor
+
+- comments and cleanup
+
+## 0.10.4 (2024-05-08)
+
+### Fix
+
+- add comments, add go_to_top and fix fetchLess to move up
+
+### Refactor
+
+- comments
+- updated
+
 ## 0.10.3 (2024-05-08)
 
 ### Refactor
