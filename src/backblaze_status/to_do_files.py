@@ -138,6 +138,11 @@ class ToDoFiles(QObject):
                 with open(file, "r") as tdf:
                     for todo_line in tdf:
                         count += 1
+                        # if count % 10000 == 0:
+                        #     self._multi_log.log(
+                        #         f"Reading {count:,} lines from To Do file"
+                        #         f" {self.to_do_file_name}"
+                        #     )
                         # The structure of the file that I care about are the 6th field,
                         # which is the filename, and the fifth field, which is the
                         # file size.
@@ -149,13 +154,9 @@ class ToDoFiles(QObject):
                         # file as skipped, otherwise mark it as unprocessed. If I
                         # can't access the file because of permissions, assume it is
                         # unprocessed.
-                        try:
-                            if not file_path.exists():
-                                state = Key.Skipped
-                            else:
-                                state = Key.Unprocessed
-                        except PermissionError:
-                            state = Key.Unprocessed
+
+                        state = Key.Unprocessed
+
                         # if self.exists(str(todo_filename)):
                         #     continue
 
@@ -388,6 +389,7 @@ class ToDoFiles(QObject):
 
                 self.backup_status.signals.update_chunk_progress.emit()
                 self.backup_status.signals.update_stats_box.emit()
+                # self.backup_status.signals.update_chunk.emit(chunk)
 
             case MessageTypes.AddDedupedChunk:
                 # Process a new duplicated chunk. First, set the state to
@@ -418,6 +420,7 @@ class ToDoFiles(QObject):
 
                 self.backup_status.signals.update_chunk_progress.emit()
                 self.backup_status.signals.update_stats_box.emit()
+                # self.backup_status.signals.update_chunk.emit(chunk)
 
             case MessageTypes.AddPreparedChunk:
                 # Process a new prepared chunk. First, set the state to
@@ -443,6 +446,8 @@ class ToDoFiles(QObject):
                 )
 
                 self.backup_status.signals.update_chunk_progress.emit()
+                self.backup_status.signals.update_stats_box.emit()
+                # self.backup_status.signals.update_chunk.emit(chunk)
 
             case _:
                 self._multi_log.log(
@@ -458,41 +463,47 @@ class ToDoFiles(QObject):
         rest are labeled as Unprocessed, unless they were already skipped because
         they don't exist
         """
-        index_count = self.to_do_list.at[file_name, ToDoColumns.IndexCount]
-        self.to_do_list[ToDoColumns.State] = self.to_do_list.apply(
-            lambda row: (
-                Key.PreCompleted
-                if row[ToDoColumns.IndexCount] < index_count
-                else (
-                    Key.Skipped
-                    if row[ToDoColumns.State] == Key.Skipped
-                    else Key.Unprocessed
-                )
-            ),
-            axis=1,
-        )
+        try:
+            index_count = self.to_do_list.at[file_name, ToDoColumns.IndexCount]
+            self.to_do_list[ToDoColumns.State] = self.to_do_list.apply(
+                lambda row: (
+                    Key.PreCompleted
+                    if row[ToDoColumns.IndexCount] < index_count
+                    else (
+                        Key.Skipped
+                        if row[ToDoColumns.State] == Key.Skipped
+                        else Key.Unprocessed
+                    )
+                ),
+                axis=1,
+            )
 
-        self.update_stats()
-        self.backup_status.signals.go_to_current_row.emit()
+            self.update_stats()
+            self.backup_status.signals.go_to_current_row.emit()
+        except KeyError:
+            return
 
     @pyqtSlot()
     def update_to_do_list(self):
         """
         Update the to mark unprocessed files before the current file to skipped
         """
-        current_index = self.to_do_list.at[
-            CurrentState.CurrentFile, ToDoColumns.IndexCount
-        ]
-        self.to_do_list[ToDoColumns.State] = self.to_do_list.apply(
-            lambda row: (
-                Key.Skipped
-                if row[ToDoColumns.IndexCount] < current_index
-                and row[ToDoColumns.State] == Key.Unprocessed
-                else row[ToDoColumns.State]
-            ),
-            axis=1,
-        )
-        self.update_stats()
+        try:
+            current_index = self.to_do_list.at[
+                CurrentState.CurrentFile, ToDoColumns.IndexCount
+            ]
+            self.to_do_list[ToDoColumns.State] = self.to_do_list.apply(
+                lambda row: (
+                    Key.Skipped
+                    if row[ToDoColumns.IndexCount] < current_index
+                    and row[ToDoColumns.State] == Key.Unprocessed
+                    else row[ToDoColumns.State]
+                ),
+                axis=1,
+            )
+            self.update_stats()
+        except KeyError as e:
+            return
 
     def update_stats(self):
         """
@@ -602,7 +613,11 @@ class ToDoFiles(QObject):
         self.set_value(file_name, ToDoColumns.EndTime, end_time)
         self.set_value(file_name, ToDoColumns.State, Key.Completed)
 
-        deduped_chunks = CurrentState.ToDoList[file_name][ToDoColumns.DedupedChunks]
+        try:
+            deduped_chunks = CurrentState.ToDoList[file_name][ToDoColumns.DedupedChunks]
+        except KeyError:
+            deduped_chunks = 0
+
         self.set_value(
             file_name,
             ToDoColumns.DedupedChunksCount,
@@ -752,9 +767,15 @@ class ToDoFiles(QObject):
             except OverflowError:
                 CurrentState.EstimatedCompletionTime = None
 
-        self.backup_status.data_model_table.resizeRowToContents(
-            CurrentState.ToDoList[file_name][ToDoColumns.IndexCount]
-        )
+        # This is for debugging purposes. Take out later
+        try:
+            self.backup_status.data_model_table.resizeRowToContents(
+                CurrentState.ToDoList[file_name][ToDoColumns.IndexCount]
+            )
+        except TypeError:
+            print(
+                f"Index is {CurrentState.ToDoList[file_name][ToDoColumns.IndexCount]}"
+            )
 
         self.backup_status.signals.update_stats_box.emit()
 
@@ -793,9 +814,10 @@ class ToDoFiles(QObject):
         """
         When the backup completes
         """
-        # self._multi_log.log("Backup Complete")
+        self._multi_log.log("Backup Complete")
         CurrentState.BackupRunning = False
         CurrentState.CurrentFile = None
+        CurrentState.ToDoFileRead = False
         self.backup_status.signals.backup_running.emit(False)
 
     def get_to_do_file(self) -> str:
