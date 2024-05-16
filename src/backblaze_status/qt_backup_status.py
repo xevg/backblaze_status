@@ -212,6 +212,7 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
 
         # Set up the scroll bars
         self.data_model_table.verticalScrollBar().valueChanged.connect(self.scrolled)
+        self.resize(2100, 1000)
 
     def define_signals(self):
         """
@@ -535,9 +536,12 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
         self.progressBar.setMaximum(int(total_bytes))
 
         # Set elapsed time
-        self.elapsed_time.setText(
-            str(datetime.now() - CurrentState.StartTime).split(".")[0]
-        )
+        if CurrentState.BackupRunning:
+            elapsed_text = str(datetime.now() - CurrentState.StartTime).split(".")[0]
+        else:
+            elapsed_text = "0:00"
+
+        self.elapsed_time.setText(elapsed_text)
 
         # Calculate remaining time
         time_remaining_string = str(
@@ -605,18 +609,38 @@ class QTBackupStatus(QMainWindow, UiMainWindow):
                     ToDoColumns.TransmittedChunks
                 ]
             )
+
+            if total_transmitted_chunks == 0:
+                max_transmitted_chunks = 0
+            else:
+                max_transmitted_chunks = max(
+                    CurrentState.ToDoList[CurrentState.CurrentFile][
+                        ToDoColumns.TransmittedChunks
+                    ]
+                )
+
             total_deduped_chunks = len(
                 CurrentState.ToDoList[CurrentState.CurrentFile][
                     ToDoColumns.DedupedChunks
                 ]
             )
 
+            if total_deduped_chunks == 0:
+                max_deduped_chunks = 0
+            else:
+                max_deduped_chunks = max(
+                    CurrentState.ToDoList[CurrentState.CurrentFile][
+                        ToDoColumns.DedupedChunks
+                    ]
+                )
+
+            max_processed_chunks = max(max_deduped_chunks, max_transmitted_chunks)
             total_processed_chunks = total_transmitted_chunks + total_deduped_chunks
             self.transmit_chunk_progress_bar.setValue(total_processed_chunks)
 
             self.chunk_filename.setText(
                 f"Transmitting: {CurrentState.CurrentFile}"
-                f" ({total_processed_chunks:>4,} /"
+                f" ({max_processed_chunks:>4,} /"
                 f" {total_chunks:,} chunks)"
             )
 
