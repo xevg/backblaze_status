@@ -34,6 +34,7 @@ class BzTransmit:
     first_pass: bool = field(default=True, init=False)
     last_file_started: str = field(default=None, init=False)
     last_file_started_time: datetime = field(default=None, init=False)
+    log_files: list = field(default_factory=list, init=False)
 
     BZ_LOG_DIR: str = field(
         default="/Library/Backblaze.bzpkg/bzdata/bzlogs/bztransmit",
@@ -71,16 +72,19 @@ class BzTransmit:
 
         :return:
         """
-        last_file = None
         _dir = Path(self.BZ_LOG_DIR)
+        file_stats = {}
         for _file in _dir.iterdir():
             if _file.suffix == ".log":
-                if not last_file:
-                    last_file = _file
-                else:
-                    if _file.stat().st_mtime > last_file.stat().st_mtime:
-                        last_file = _file
-        return last_file
+                file_stats[str(_file)] = _file.stat().st_mtime
+
+        self.log_files = [
+            k
+            for k in sorted(
+                file_stats.keys(), key=lambda x: file_stats[x], reverse=True
+            )
+        ]
+        return self.log_files[0]
 
     def process_line(self, _line: str) -> bool:
         """
@@ -169,6 +173,7 @@ class BzTransmit:
                 f"Add deduped chunk {chunk_number} to {filename}",
                 {Key.FileName: filename, Key.Chunk: chunk_number},
             )
+            # self.backup_status.signals.update_chunk.emit(chunk_number)
 
         return False
 
@@ -205,6 +210,17 @@ class BzTransmit:
                         found_name = self.process_line(line)
                         if found_name:
                             break
+                # If the last file name wasn't found in the current file, check the previous one
+                if not found_name:
+                    with FileReadBackwards(self.log_files[1], encoding="utf-8") as frb:
+                        while True:
+                            line = frb.readline()
+                            if not line:
+                                break
+                            found_name = self.process_line(line)
+                            if found_name:
+                                break
+
                 self.emit_message(
                     MessageTypes.StartNewFile,
                     f"New file is {self.last_file_started}",
@@ -215,7 +231,7 @@ class BzTransmit:
                 )
                 self._multi_log.log(f"Set current file to {self.last_file_started}")
             file_count = 0
-            with log_file.open("r") as log_fd:
+            with Path(log_file).open("r") as log_fd:
                 self._multi_log.log(f"Reading file {log_file}")
                 # If this is the first time through, we've already gotten the name of
                 # the processing file, so skip to the end of the file
