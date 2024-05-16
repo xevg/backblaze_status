@@ -19,7 +19,7 @@ class ChunkDialog(QDialog):
 
         self.setWindowModality(Qt.WindowModality.NonModal)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
+        self.setContentsMargins(0, 0, 0, 0)
         self.dialog_chunk_table = self.create_chunk_table()
 
         self.chunk_table_dialog_layout = QVBoxLayout()
@@ -35,14 +35,16 @@ class ChunkDialog(QDialog):
         chunk_table = QTableView(self)
         chunk_table.setObjectName("ChunkTable")
 
-        chunk_table.horizontalHeader().setMaximumSectionSize(2)
+        chunk_table.horizontalHeader().setMaximumSectionSize(4)
         chunk_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Fixed
+            QHeaderView.ResizeMode.ResizeToContents
         )
         chunk_table.horizontalHeader().setVisible(False)
 
-        chunk_table.verticalHeader().setMaximumSectionSize(2)
-        chunk_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        chunk_table.verticalHeader().setMaximumSectionSize(4)
+        chunk_table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
         chunk_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         chunk_table.verticalHeader().setVisible(False)
         chunk_table.setShowGrid(False)
