@@ -7,6 +7,7 @@ from typing import Any
 from PyQt6.QtCore import QAbstractTableModel, Qt, QModelIndex, pyqtSlot, QTimer
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import QAbstractItemView
+from rich.columns import Columns
 
 from .constants import Key, ToDoColumns
 from .current_state import CurrentState
@@ -95,12 +96,12 @@ class BzDataTableModel(QAbstractTableModel):
         self.column_names = [
             "Time",
             "File Name",
-            "Chunks Prepared",
-            "Chunks Transmitted",
-            "Chunks Deduped",
-            "File Size",
-            "Interval",
-            "Rate",
+            "  Chunks Prepared  ",
+            "  Chunks Transmitted  ",
+            "  Chunks Deduped  ",
+            "  File Size  ",
+            "  Interval  ",
+            "  Rate  ",
         ]
 
         # Map the column names to the ToDoColumns
@@ -266,6 +267,11 @@ class BzDataTableModel(QAbstractTableModel):
                         result = row_data[ToDoColumns.FileSize] / time_difference
                         return f"{file_size_string(result)} / sec"
 
+            case Qt.ItemDataRole.FontRole:
+                if column == ColumnNames.FILE_NAME:
+                    return self.backup_status.messlo_font
+                else:
+                    return self.backup_status.fixed_font
             case Qt.ItemDataRole.ForegroundRole:
                 if file_name == CurrentState.CurrentFile:
                     return self.RowForegroundColors[RowType.CURRENT]
@@ -305,13 +311,16 @@ class BzDataTableModel(QAbstractTableModel):
         if CurrentState.CurrentFile is None:
             return
 
-        current_row = CurrentState.ToDoList[CurrentState.CurrentFile][
-            ToDoColumns.IndexCount
-        ]
+        try:
+            current_row = CurrentState.ToDoList[CurrentState.CurrentFile][
+                ToDoColumns.IndexCount
+            ]
 
-        start_index = self.index(int(current_row), ColumnNames.CHUNKS_PREPARED)
-        end_index = self.index(int(current_row), ColumnNames.INTERVAL)
-        self.dataChanged.emit(start_index, end_index, [Qt.ItemDataRole.DisplayRole])
+            start_index = self.index(int(current_row), ColumnNames.CHUNKS_PREPARED)
+            end_index = self.index(int(current_row), ColumnNames.INTERVAL)
+            self.dataChanged.emit(start_index, end_index, [Qt.ItemDataRole.DisplayRole])
+        except KeyError:
+            return
 
     def canFetchMore(self, index):
         """
