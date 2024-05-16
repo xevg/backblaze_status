@@ -152,6 +152,7 @@ class BzPrepare:
                 "timestamp": str(datetime.now()).split(".")[0],
                 "publish_count": self.publish_count,
             }
+            # self.backup_status.signals.update_chunk.emit(chunk_number)
             ic(f"Emitting chunk {chunk_number}")
             self.backup_status.signals.get_messages.emit(message)
 
