@@ -12,6 +12,7 @@ class Signals(QObject):
     update_stats_box = pyqtSignal()
     go_to_current_row = pyqtSignal()
     update_chunk_progress = pyqtSignal()
+    update_chunk = pyqtSignal(int)
 
     # Data triggers
 
