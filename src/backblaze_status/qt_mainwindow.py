@@ -33,6 +33,7 @@ class UiMainWindow(object):
         MainWindow.resize(2100, 1000)
 
         # Define the font to use when I need a fixed font
+        self.messlo_font = QFontDatabase.font("MessloLGS NF", "", 12)
         self.fixed_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         self.fixed_font.setStyleHint(QFont.StyleHint.Monospace)
         self.fixed_font.setPointSize(12)
@@ -42,7 +43,11 @@ class UiMainWindow(object):
         # The main widget
         self.central_widget = QWidget(parent=MainWindow)
         self.central_widget.setObjectName("centralWidget")
-
+        size_policy = QSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Preferred,
+        )
+        self.central_widget.setSizePolicy(size_policy)
         # I'm using a stylesheet
         self.central_widget.setStyleSheet(CssStyles.dark_orange)
 
@@ -313,11 +318,13 @@ class UiMainWindow(object):
 
         chunk_table.horizontalHeader().setMaximumSectionSize(2)
         chunk_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.Fixed
+            QHeaderView.ResizeMode.ResizeToContents
         )
         chunk_table.horizontalHeader().setVisible(False)
         chunk_table.verticalHeader().setMaximumSectionSize(2)
-        chunk_table.verticalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Fixed)
+        chunk_table.verticalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
         chunk_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
 
         chunk_table.verticalHeader().setVisible(False)
