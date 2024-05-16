@@ -2,6 +2,30 @@
 
 
 
+## 0.12.9 (2024-05-15)
+
+### Fix
+
+- **ToDoFiles**: change how to detect skipped files
+- **Signals**: add update_chunk
+- **QtMainWindow**: change font
+- **QtBackupStatus**: add transmitted chunk
+- **BzTransmit**: reverse read previous file to get current filename
+- **BzPrepare**: take out debug statement
+- **BzLastFileTransmitted**: take out debug statement
+- **BzDataTableModel**: add error checking and column spaces
+- **ToDoFiles**: add commas
+
+### Refactor
+
+- **ChunkModel**: change management of chunk display
+
+## 0.12.8 (2024-05-09)
+
+### Refactor
+
+- update metadata
+
 ## 0.12.7 (2024-05-09)
 
 ### Fix

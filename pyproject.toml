@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "backblaze_status"
-version = "0.12.7"
+version = "0.12.9"
 description = "Looking at the state of the Backblaze backup"
 authors = ["Xev Gittler"]
 license = "MIT"
