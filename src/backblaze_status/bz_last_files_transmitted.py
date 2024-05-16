@@ -239,6 +239,7 @@ class BzLastFilesTransmitted:
                             Key.Chunk: _chunk_number,
                         },
                     )
+                    # self.backup_status.signals.update_chunk.emit(_chunk_number)
 
                 else:
                     self.emit_message(
@@ -260,6 +261,7 @@ class BzLastFilesTransmitted:
                             Key.Chunk: _chunk_number,
                         },
                     )
+                    # self.backup_status.signals.update_chunk.emit(_chunk_number)
 
                 else:  # It's not a chunk, then the file was completed in one line
                     self.emit_message(
